@@ -8,6 +8,7 @@ and the entered values preserved.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -384,16 +385,82 @@ def teachers_deactivate(teacher_id: str, session: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------------------
-# Enrollment (minimal shell for Task 3; full submit logic lands in Task 4)
+# Enrollments (effective-dated membership)
 # ---------------------------------------------------------------------------
-@router.get("/enrollments/new", response_class=HTMLResponse)
-def enrollment_new(request: Request, session: Session = Depends(get_db)):
+def _enrollments_context(
+    request: Request,
+    session: Session,
+    form: dict | None = None,
+    errors: list[str] | None = None,
+) -> dict:
+    rows = []
+    for enrollment in repository.list_enrollments(session):
+        student = session.get(Student, enrollment.student_id)
+        klass = session.get(Class, enrollment.class_id)
+        rows.append(
+            {
+                "enrollment_id": enrollment.enrollment_id,
+                "student_name": student.name if student else enrollment.student_id,
+                "class_name": klass.name if klass else enrollment.class_id,
+                "start_date": enrollment.start_date,
+                "end_date": enrollment.end_date,
+                "status": enrollment.status,
+            }
+        )
+    return {
+        "enrollments": rows,
+        "students": repository.list_students(session, active_only=True),
+        "classes": repository.list_classes(session, active_only=True),
+        "form": form or {"student_id": "", "class_id": "", "start_date": ""},
+        "errors": errors or [],
+        "created": request.query_params.get("created"),
+    }
+
+
+@router.get("/enrollments", response_class=HTMLResponse)
+def enrollments_page(request: Request, session: Session = Depends(get_db)):
     return templates.TemplateResponse(
-        request,
-        "catalog/enrollment_new.html",
-        {
-            "students": repository.list_students(session, active_only=True),
-            "classes": repository.list_classes(session, active_only=True),
-            "teachers": repository.list_teachers(session, active_only=True),
-        },
+        request, "catalog/enrollments.html", _enrollments_context(request, session)
     )
+
+
+@router.post("/enrollments")
+def enrollments_create(
+    request: Request,
+    student_id: str = Form(...),
+    class_id: str = Form(...),
+    start_date: str = Form(...),
+    session: Session = Depends(get_db),
+):
+    form = {"student_id": student_id, "class_id": class_id, "start_date": start_date}
+    try:
+        repository.enroll_student(
+            session, student_id, class_id, date.fromisoformat(start_date)
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "catalog/enrollments.html",
+            _enrollments_context(request, session, form=form, errors=[str(exc)]),
+            status_code=422,
+        )
+    return RedirectResponse("/catalog/enrollments", status_code=303)
+
+
+@router.post("/enrollments/{enrollment_id}/leave")
+def enrollments_leave(
+    request: Request,
+    enrollment_id: int,
+    end_date: str = Form(...),
+    session: Session = Depends(get_db),
+):
+    try:
+        repository.leave_class(session, enrollment_id, date.fromisoformat(end_date))
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "catalog/enrollments.html",
+            _enrollments_context(request, session, errors=[str(exc)]),
+            status_code=422,
+        )
+    return RedirectResponse("/catalog/enrollments", status_code=303)

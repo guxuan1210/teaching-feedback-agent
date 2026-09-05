@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}报名管理{% endblock %}
+{% block content %}
+<h1>报名管理</h1>
+
+<h2>新建报名</h2>
+<form method="post" action="/catalog/enrollments" class="create-form">
+  <label>
+    学生
+    <select name="student_id" required>
+      <option value="">请选择学生</option>
+      {% for s in students %}
+        <option value="{{ s.student_id }}" {% if form.student_id == s.student_id %}selected{% endif %}>
+          {{ s.name }}（{{ s.grade or '' }}）
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    班级
+    <select name="class_id" required>
+      <option value="">请选择班级</option>
+      {% for c in classes %}
+        <option value="{{ c.class_id }}" {% if form.class_id == c.class_id %}selected{% endif %}>
+          {{ c.name }}（{{ c.class_type }}）
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    入班日期
+    <input type="date" name="start_date" value="{{ form.start_date }}" required>
+  </label>
+  <button type="submit">报名</button>
+</form>
+
+<h2>报名记录</h2>
+<table>
+  <thead>
+    <tr><th>学生</th><th>班级</th><th>入班日期</th><th>离班日期</th><th>状态</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+    {% for e in enrollments %}
+      <tr>
+        <td>{{ e.student_name }}</td>
+        <td>{{ e.class_name }}</td>
+        <td>{{ e.start_date }}</td>
+        <td>{{ e.end_date or '—' }}</td>
+        <td>{{ '在班' if e.status == 'active' else '已离班' }}</td>
+        <td>
+          {% if e.status == 'active' %}
+            <form method="post" action="/catalog/enrollments/{{ e.enrollment_id }}/leave" class="inline">
+              <input type="date" name="end_date" required>
+              <button type="submit">离班</button>
+            </form>
+          {% else %}
+            —
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6">暂无报名记录</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

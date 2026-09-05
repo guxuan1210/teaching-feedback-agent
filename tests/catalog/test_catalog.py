@@ -8,7 +8,7 @@ def test_create_student_and_show_it_in_catalog(client):
 
 def test_inactive_student_is_not_available_for_new_enrollment(client, student):
     client.post(f"/catalog/students/{student.student_id}/deactivate")
-    response = client.get("/catalog/enrollments/new")
+    response = client.get("/catalog/enrollments")
     assert student.name not in response.text
 
 

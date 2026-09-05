@@ -9,12 +9,12 @@ validate inputs (blank names and out-of-range enumerations are rejected with
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.catalog.models import Class, Student, Teacher
+from app.catalog.models import Class, Enrollment, Student, Teacher
 from app.core.ids import new_id
 
 CLASS_TYPES = {"daily", "special"}
@@ -221,3 +221,82 @@ def deactivate_teacher(session: Session, teacher_id: str) -> Teacher:
     teacher.updated_at = _utcnow()
     session.commit()
     return teacher
+
+
+# ---------------------------------------------------------------------------
+# Enrollments (effective-dated membership)
+# ---------------------------------------------------------------------------
+def enroll_student(
+    session: Session,
+    student_id: str,
+    class_id: str,
+    start_date: date,
+) -> Enrollment:
+    if session.get(Student, student_id) is None:
+        raise ValueError("学生不存在")
+    if session.get(Class, class_id) is None:
+        raise ValueError("班级不存在")
+    new_start = start_date.isoformat()
+    existing = session.scalars(
+        select(Enrollment).where(
+            Enrollment.student_id == student_id,
+            Enrollment.class_id == class_id,
+        )
+    ).all()
+    for row in existing:
+        # A new enrollment is open-ended (end_date=None == infinity), so it
+        # overlaps any prior interval that reaches past new_start.
+        if row.end_date is None or row.end_date >= new_start:
+            raise ValueError("已在该班级的有效期内")
+    enrollment = Enrollment(
+        student_id=student_id,
+        class_id=class_id,
+        start_date=new_start,
+        end_date=None,
+        status="active",
+    )
+    session.add(enrollment)
+    session.commit()
+    return enrollment
+
+
+def leave_class(session: Session, enrollment_id: int, end_date: date) -> Enrollment:
+    enrollment = session.get(Enrollment, enrollment_id)
+    if enrollment is None:
+        raise ValueError("入班记录不存在")
+    if enrollment.end_date is not None:
+        raise ValueError("该学生已离班")
+    if end_date.isoformat() < enrollment.start_date:
+        raise ValueError("离班日期不能早于入班日期")
+    enrollment.end_date = end_date.isoformat()
+    enrollment.status = "left"
+    enrollment.updated_at = _utcnow()
+    session.commit()
+    return enrollment
+
+
+def active_roster(session: Session, class_id: str, on_date: date) -> list[Student]:
+    on = on_date.isoformat()
+    stmt = (
+        select(Student)
+        .join(Enrollment, Enrollment.student_id == Student.student_id)
+        .where(
+            Enrollment.class_id == class_id,
+            Enrollment.start_date <= on,
+            or_(Enrollment.end_date.is_(None), Enrollment.end_date >= on),
+        )
+        .order_by(Student.name)
+    )
+    return list(session.scalars(stmt).unique())
+
+
+def list_enrollments(session: Session, class_id: str | None = None) -> list[Enrollment]:
+    stmt = (
+        select(Enrollment)
+        .join(Student, Student.student_id == Enrollment.student_id)
+        .join(Class, Class.class_id == Enrollment.class_id)
+        .order_by(Enrollment.start_date, Enrollment.enrollment_id)
+    )
+    if class_id:
+        stmt = stmt.where(Enrollment.class_id == class_id)
+    return list(session.scalars(stmt))
