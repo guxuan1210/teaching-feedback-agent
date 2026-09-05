@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}班级管理{% endblock %}
+{% block content %}
+<h1>班级管理</h1>
+
+<div class="create-form">
+  <h2>{% if editing %}编辑班级{% else %}新增班级{% endif %}</h2>
+  <form method="post" action="{{ action_url }}">
+    <input type="text" name="name" placeholder="班级名称" value="{{ form.name }}" required>
+    <input type="text" name="grade" placeholder="年级" value="{{ form.grade }}">
+    <select name="class_type">
+      <option value="daily" {% if form.class_type == 'daily' %}selected{% endif %}>晚辅</option>
+      <option value="special" {% if form.class_type == 'special' %}selected{% endif %}>专项</option>
+    </select>
+    <select name="head_teacher_id">
+      <option value="">未指定班主任</option>
+      {% for t in teachers %}
+      <option value="{{ t.teacher_id }}" {% if form.head_teacher_id == t.teacher_id %}selected{% endif %}>{{ t.name }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">{% if editing %}保存{% else %}新增{% endif %}</button>
+    {% if editing %}<a href="/catalog/classes">取消</a>{% endif %}
+  </form>
+</div>
+
+<table>
+  <thead>
+    <tr><th>班级名称</th><th>年级</th><th>类型</th><th>班主任</th><th>状态</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+  {% for c in classes %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td>{{ c.grade or '' }}</td>
+      <td>{{ c.class_type }}</td>
+      <td>{{ c.head_teacher_id or '' }}</td>
+      <td>{{ c.status }}</td>
+      <td>
+        <a href="/catalog/classes/{{ c.class_id }}/edit">编辑</a>
+        <form class="inline" method="post" action="/catalog/classes/{{ c.class_id }}/deactivate">
+          <button type="submit">停用</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6">暂无班级</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

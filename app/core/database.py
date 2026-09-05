@@ -77,6 +77,33 @@ def initialize_database(engine: Engine) -> None:
             conn.exec_driver_sql(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
+def _indicator_seed_path() -> Path:
+    """Resolve the indicator seed file relative to the package, not the CWD."""
+    return Path(__file__).resolve().parent.parent.parent / "db" / "seed_indicators.sql"
+
+
+def seed_indicators(engine: Engine) -> None:
+    """Seed the indicator dictionary using insert-missing semantics.
+
+    ``db/seed_indicators.sql`` uses ``INSERT OR IGNORE`` so existing rows are
+    never overwritten. Every statement runs inside a single transaction so a
+    partial failure leaves the indicator table unchanged.
+    """
+    script = _indicator_seed_path().read_text(encoding="utf-8")
+
+    statements: list[str] = []
+    for chunk in script.split(";"):
+        stmt = "\n".join(
+            line for line in chunk.splitlines() if not line.strip().startswith("--")
+        ).strip()
+        if stmt:
+            statements.append(stmt)
+
+    with engine.begin() as conn:
+        for stmt in statements:
+            conn.exec_driver_sql(stmt)
+
+
 def get_db(request: Request) -> Iterator[Session]:
     """FastAPI dependency that yields a scoped session for one request."""
     factory: sessionmaker = request.app.state.session_factory

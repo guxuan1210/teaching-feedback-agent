@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}新建报名{% endblock %}
+{% block content %}
+<h1>新建报名（预览）</h1>
+<p>以下为当前可报名的学生、班级与教师。完整的报名/退出提交逻辑将在后续任务实现。</p>
+
+<h2>可选学生</h2>
+<ul>
+  {% for s in students %}<li>{{ s.name }}（{{ s.grade or '' }}）</li>{% else %}<li>暂无可报名学生</li>{% endfor %}
+</ul>
+
+<h2>可选班级</h2>
+<ul>
+  {% for c in classes %}<li>{{ c.name }}（{{ c.class_type }}）</li>{% else %}<li>暂无可报名班级</li>{% endfor %}
+</ul>
+
+<h2>可选教师</h2>
+<ul>
+  {% for t in teachers %}<li>{{ t.name }}（{{ t.role or '' }}）</li>{% else %}<li>暂无可用教师</li>{% endfor %}
+</ul>
+{% endblock %}

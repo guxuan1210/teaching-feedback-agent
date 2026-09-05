@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}教师管理{% endblock %}
+{% block content %}
+<h1>教师管理</h1>
+
+<div class="create-form">
+  <h2>{% if editing %}编辑教师{% else %}新增教师{% endif %}</h2>
+  <form method="post" action="{{ action_url }}">
+    <input type="text" name="name" placeholder="姓名" value="{{ form.name }}" required>
+    <input type="text" name="role" placeholder="角色" value="{{ form.role }}">
+    <button type="submit">{% if editing %}保存{% else %}新增{% endif %}</button>
+    {% if editing %}<a href="/catalog/teachers">取消</a>{% endif %}
+  </form>
+</div>
+
+<table>
+  <thead>
+    <tr><th>姓名</th><th>角色</th><th>状态</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+  {% for t in teachers %}
+    <tr>
+      <td>{{ t.name }}</td>
+      <td>{{ t.role or '' }}</td>
+      <td>{{ t.status }}</td>
+      <td>
+        <a href="/catalog/teachers/{{ t.teacher_id }}/edit">编辑</a>
+        <form class="inline" method="post" action="/catalog/teachers/{{ t.teacher_id }}/deactivate">
+          <button type="submit">停用</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4">暂无教师</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}教学反馈数据采集{% endblock %}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #1f2937; }
+    nav { margin-bottom: 1.5rem; }
+    nav a { margin-right: 1rem; text-decoration: none; color: #2563eb; }
+    .flash { padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 6px; }
+    .flash.success { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; }
+    .flash.error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+    .flash.error p { margin: 0.25rem 0; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1.5rem; }
+    th, td { border: 1px solid #e5e7eb; padding: 0.5rem; text-align: left; }
+    th { background: #f9fafb; }
+    form.inline { display: inline; }
+    input, select, button { padding: 0.3rem 0.5rem; margin: 0.2rem; }
+    .create-form { background: #f9fafb; padding: 1rem; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/catalog">概览</a>
+    <a href="/catalog/students">学生</a>
+    <a href="/catalog/classes">班级</a>
+    <a href="/catalog/teachers">教师</a>
+    <a href="/catalog/enrollments/new">新建报名</a>
+  </nav>
+
+  {% if created %}
+    <div class="flash success">已创建记录 ID：{{ created }}</div>
+  {% endif %}
+  {% if errors %}
+    <div class="flash error">
+      {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  {% block content %}{% endblock %}
+</body>
+</html>

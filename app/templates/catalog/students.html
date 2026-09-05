@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}学生管理{% endblock %}
+{% block content %}
+<h1>学生管理</h1>
+
+<div class="create-form">
+  <h2>{% if editing %}编辑学生{% else %}新增学生{% endif %}</h2>
+  <form method="post" action="{{ action_url }}">
+    <input type="text" name="name" placeholder="姓名" value="{{ form.name }}" required>
+    <input type="text" name="grade" placeholder="年级" value="{{ form.grade }}">
+    <input type="text" name="current_stage" placeholder="当前阶段" value="{{ form.current_stage }}">
+    <button type="submit">{% if editing %}保存{% else %}新增{% endif %}</button>
+    {% if editing %}<a href="/catalog/students">取消</a>{% endif %}
+  </form>
+</div>
+
+<table>
+  <thead>
+    <tr><th>姓名</th><th>年级</th><th>当前阶段</th><th>状态</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+  {% for s in students %}
+    <tr>
+      <td>{{ s.name }}</td>
+      <td>{{ s.grade or '' }}</td>
+      <td>{{ s.current_stage or '' }}</td>
+      <td>{{ s.status }}</td>
+      <td>
+        <a href="/catalog/students/{{ s.student_id }}/edit">编辑</a>
+        <form class="inline" method="post" action="/catalog/students/{{ s.student_id }}/deactivate">
+          <button type="submit">停用</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">暂无学生</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
