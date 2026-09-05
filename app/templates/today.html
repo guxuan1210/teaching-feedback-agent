@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}今日填写{% endblock %}
+{% block content %}
+<h1>今日班级</h1>
+
+<h2>新建场次</h2>
+<form method="get" action="/" class="create-form">
+  <label>日期 <input type="date" name="date" value="{{ on_date }}"></label>
+  <button type="submit">切换日期</button>
+</form>
+
+<form method="post" action="/sessions" class="create-form">
+  <input type="hidden" name="session_date" value="{{ on_date }}">
+  <label>课程类型
+    <select name="session_type">
+      <option value="daily" {% if form.session_type == 'daily' %}selected{% endif %}>晚辅</option>
+      <option value="special" {% if form.session_type == 'special' %}selected{% endif %}>专项</option>
+    </select>
+  </label>
+  <label>班级
+    <select name="class_id" required>
+      <option value="">请选择班级</option>
+      {% for c in classes %}
+        <option value="{{ c.class_id }}" {% if form.class_id == c.class_id %}selected{% endif %}>{{ c.name }}（{{ c.class_type }}）</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>授课老师
+    <select name="teacher_id" required>
+      <option value="">请选择老师</option>
+      {% for t in teachers %}
+        <option value="{{ t.teacher_id }}" {% if form.teacher_id == t.teacher_id %}selected{% endif %}>{{ t.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>课程名称 <input type="text" name="course_name" value="{{ form.course_name }}" placeholder="专项课必填"></label>
+  <label>开始时间 <input type="time" name="start_time" value="{{ form.start_time }}" required></label>
+  <button type="submit">新建场次</button>
+</form>
+
+<h2>{{ on_date }} 已创建的场次</h2>
+<table>
+  <thead>
+    <tr><th>开始时间</th><th>类型</th><th>班级</th><th>老师</th><th>课程</th><th>进度</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+    {% for s in sessions %}
+      <tr>
+        <td>{{ s.start_time }}</td>
+        <td>{{ '晚辅' if s.session_type == 'daily' else '专项' }}</td>
+        <td>{{ s.class_name }}</td>
+        <td>{{ s.teacher_name }}</td>
+        <td>{{ s.course_name or '—' }}</td>
+        <td>{{ s.completed }} / {{ s.total }}</td>
+        <td><a href="/sessions/{{ s.session_id }}">进入填写</a></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7">当天暂无场次</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.catalog.routes import router as catalog_router
+from app.sessions.routes import router as sessions_router
 from app.core.database import (
     build_engine,
     build_session_factory,
@@ -24,6 +25,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
     application.state.session_factory = build_session_factory(engine)
 
     application.include_router(catalog_router)
+    application.include_router(sessions_router)
 
     @application.get("/health")
     def health() -> dict[str, str]:

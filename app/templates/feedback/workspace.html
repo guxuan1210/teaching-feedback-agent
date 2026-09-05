@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}班级批量填写{% endblock %}
+{% block content %}
+<h1>班级批量工作台</h1>
+<p>
+  {{ '晚辅' if workspace.session.session_type == 'daily' else '专项' }} ·
+  {{ workspace.session.session_date }} {{ workspace.session.start_time }}
+  {% if workspace.session.course_name %}· {{ workspace.session.course_name }}{% endif %}
+</p>
+
+<div class="workspace">
+  <aside class="roster">
+    <h2>学生名单</h2>
+    <ul>
+      {% for s in workspace.roster %}
+        <li class="{% if s.student_id == selected_student_id %}active{% endif %}">
+          <a href="/sessions/{{ workspace.session.session_id }}?student_id={{ s.student_id }}">
+            {{ s.name }} <span class="chip">{{ workspace.statuses.get(s.student_id, '未填写') }}</span>
+          </a>
+        </li>
+      {% else %}
+        <li>该场次暂无有效学生</li>
+      {% endfor %}
+    </ul>
+  </aside>
+
+  <section class="form-area">
+    {% if selected_student_id %}
+      <h2>当前学生</h2>
+      {% for s in workspace.roster %}
+        {% if s.student_id == selected_student_id %}
+          <p>{{ s.name }}</p>
+        {% endif %}
+      {% endfor %}
+      <!-- 反馈表单将在后续任务中实现 -->
+      <p class="muted">反馈表单即将开放</p>
+    {% else %}
+      <p class="muted">暂无学生可填写</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
