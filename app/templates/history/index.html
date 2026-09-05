@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}历史记录{% endblock %}
+{% block content %}
+<h1>历史记录</h1>
+
+<form method="get" action="/history" class="create-form">
+  <label>开始日期 <input type="date" name="date_from" value="{{ filters.date_from or '' }}"></label>
+  <label>结束日期 <input type="date" name="date_to" value="{{ filters.date_to or '' }}"></label>
+  <label>类型
+    <select name="session_type">
+      <option value="">全部</option>
+      <option value="daily" {% if filters.session_type == 'daily' %}selected{% endif %}>晚辅</option>
+      <option value="special" {% if filters.session_type == 'special' %}selected{% endif %}>专项</option>
+    </select>
+  </label>
+  <label>班级
+    <select name="class_id">
+      <option value="">全部班级</option>
+      {% for c in classes %}
+        <option value="{{ c.class_id }}" {% if filters.class_id == c.class_id %}selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>学生
+    <select name="student_id">
+      <option value="">全部学生</option>
+      {% for s in students %}
+        <option value="{{ s.student_id }}" {% if filters.student_id == s.student_id %}selected{% endif %}>{{ s.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>状态
+    <select name="status">
+      <option value="">正常</option>
+      <option value="void" {% if filters.status == 'void' %}selected{% endif %}>已作废</option>
+      <option value="all" {% if filters.status == 'all' %}selected{% endif %}>全部（含作废）</option>
+    </select>
+  </label>
+  <button type="submit">筛选</button>
+</form>
+
+<table>
+  <thead>
+    <tr><th>学生</th><th>班级</th><th>类型</th><th>日期</th><th>评分</th><th>状态</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.student_name }}</td>
+        <td>{{ row.class_name }}</td>
+        <td>{{ '晚辅' if row.feedback_type == 'daily' else '专项' }}</td>
+        <td>{{ row.session_date }} {{ row.start_time }}</td>
+        <td>
+          {% for field, value in row.ratings.items() %}
+            {{ RATING_LABELS[row.feedback_type][field] }}{{ value }}
+          {% endfor %}
+        </td>
+        <td>{{ '已作废' if row.status == 'void' else '正常' }}</td>
+        <td><a href="/history/{{ row.feedback_type }}/{{ row.feedback_id }}">查看／编辑</a></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7">暂无匹配记录</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

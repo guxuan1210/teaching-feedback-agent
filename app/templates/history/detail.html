@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}反馈详情{% endblock %}
+{% block content %}
+<h1>反馈详情</h1>
+<p>
+  {{ row.student_name }} · {{ row.class_name }} ·
+  {{ '晚辅' if row.feedback_type == 'daily' else '专项' }} ·
+  {{ row.session_date }} {{ row.start_time }}
+  {% if row.course_name %}· {{ row.course_name }}{% endif %}
+</p>
+
+<form method="post" action="/history/{{ row.feedback_type }}/{{ row.feedback_id }}" class="feedback-form">
+  <fieldset>
+    <legend>量化评分（1–5）</legend>
+    {% for field in rating_fields %}
+      <div class="rating">
+        <span class="rating-label">{{ rating_labels[field] }}</span>
+        {% for n in [1, 2, 3, 4, 5] %}
+          <label class="rating-option">
+            <input type="radio" name="{{ field }}" value="{{ n }}"
+                   {% if form[field] | string == n | string %}checked{% endif %} required>
+            {{ n }}
+          </label>
+        {% endfor %}
+      </div>
+    {% endfor %}
+  </fieldset>
+
+  {% for category, label, indicators in sections %}
+    <fieldset>
+      <legend>{{ label }}</legend>
+      {% for ind in indicators %}
+        <label class="checkbox">
+          <input type="checkbox" name="{{ 'progress_indicators' if 'progress' in category else 'weak_indicators' }}"
+                 value="{{ ind.indicator_id }}"
+                 {% if ind.indicator_id in selected_ids %}checked{% endif %}>
+          {{ ind.text }}
+        </label>
+      {% endfor %}
+    </fieldset>
+  {% endfor %}
+
+  <fieldset>
+    <legend>补充备注</legend>
+    <textarea name="note" rows="3">{{ form.note }}</textarea>
+  </fieldset>
+
+  <button type="submit">保存修改</button>
+</form>
+
+<form method="post" action="/history/{{ row.feedback_type }}/{{ row.feedback_id }}/void"
+      onsubmit="return confirm('确定作废这条记录吗？');" class="inline">
+  <button type="submit">作废记录</button>
+</form>
+{% endblock %}

@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.catalog.models import Class, Enrollment, Student, Teacher
 from app.core.database import build_engine, build_session_factory, initialize_database
+from app.feedback.models import DailyFeedback, SpecialFeedback
 from app.main import create_app
 from app.sessions.models import ClassSession
 
@@ -245,3 +246,105 @@ def session_with_roster(db_session) -> ClassSession:
     db_session.add(row)
     db_session.commit()
     return row
+
+
+@pytest.fixture()
+def daily_feedback(db_session) -> DailyFeedback:
+    teacher = Teacher(teacher_id="T1", name="王老师", role="晚辅教师", status="active")
+    db_session.add(teacher)
+    db_session.commit()
+
+    klass = Class(
+        class_id="C1", name="三年级A班", grade="三年级", class_type="daily",
+        head_teacher_id="T1", status="active",
+    )
+    db_session.add(klass)
+    db_session.commit()
+
+    student = Student(
+        student_id="S1", name="李明", grade="三年级", current_stage="三阶", status="active"
+    )
+    db_session.add(student)
+    db_session.commit()
+
+    db_session.add(
+        Enrollment(student_id="S1", class_id="C1", start_date="2026-09-01", status="active")
+    )
+    db_session.commit()
+
+    session = ClassSession(
+        session_id="SESSION1",
+        class_id="C1",
+        teacher_id="T1",
+        session_type="daily",
+        course_name=None,
+        session_date="2026-09-05",
+        start_time="16:30",
+        status="active",
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    row = DailyFeedback(
+        feedback_id="F-1",
+        session_id="SESSION1",
+        student_id="S1",
+        rating_knowledge=4,
+        rating_habit=4,
+        rating_mindset=4,
+        note=None,
+        status="active",
+    )
+    db_session.add(row)
+    db_session.commit()
+    return row
+
+
+@pytest.fixture()
+def mixed_feedback(db_session) -> None:
+    teacher = Teacher(teacher_id="T1", name="王老师", role="晚辅教师", status="active")
+    db_session.add(teacher)
+    db_session.commit()
+
+    db_session.add_all([
+        Class(class_id="C1", name="三年级A班", grade="三年级", class_type="daily",
+              head_teacher_id="T1", status="active"),
+        Class(class_id="C2", name="数学思维班", grade="三年级", class_type="special",
+              head_teacher_id="T1", status="active"),
+    ])
+    db_session.commit()
+
+    db_session.add_all([
+        Student(student_id="S1", name="李明", grade="三年级", current_stage="三阶", status="active"),
+        Student(student_id="S2", name="王芳", grade="三年级", current_stage="三阶", status="active"),
+    ])
+    db_session.commit()
+
+    db_session.add_all([
+        Enrollment(student_id="S1", class_id="C1", start_date="2026-09-01", status="active"),
+        Enrollment(student_id="S2", class_id="C1", start_date="2026-09-01", status="active"),
+        Enrollment(student_id="S1", class_id="C2", start_date="2026-09-01", status="active"),
+    ])
+    db_session.commit()
+
+    db_session.add_all([
+        ClassSession(session_id="SESSION-DAILY", class_id="C1", teacher_id="T1",
+                     session_type="daily", course_name=None, session_date="2026-09-05",
+                     start_time="16:30", status="active"),
+        ClassSession(session_id="SESSION-SPECIAL", class_id="C2", teacher_id="T1",
+                     session_type="special", course_name="数学思维", session_date="2026-09-05",
+                     start_time="17:30", status="active"),
+    ])
+    db_session.commit()
+
+    db_session.add_all([
+        DailyFeedback(feedback_id="F-DAILY-S1", session_id="SESSION-DAILY", student_id="S1",
+                      rating_knowledge=4, rating_habit=4, rating_mindset=5,
+                      note=None, status="active"),
+        DailyFeedback(feedback_id="F-DAILY-S2", session_id="SESSION-DAILY", student_id="S2",
+                      rating_knowledge=3, rating_habit=3, rating_mindset=3,
+                      note=None, status="active"),
+        SpecialFeedback(feedback_id="F-SPECIAL-S1", session_id="SESSION-SPECIAL", student_id="S1",
+                        rating_skill=4, rating_habit=4, note=None, status="active"),
+    ])
+    db_session.commit()
