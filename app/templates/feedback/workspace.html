@@ -26,17 +26,54 @@
 
   <section class="form-area">
     {% if selected_student_id %}
-      <h2>当前学生</h2>
-      {% for s in workspace.roster %}
-        {% if s.student_id == selected_student_id %}
-          <p>{{ s.name }}</p>
-        {% endif %}
-      {% endfor %}
-      <!-- 反馈表单将在后续任务中实现 -->
-      <p class="muted">反馈表单即将开放</p>
+      {% set student = workspace.roster | selectattr('student_id', 'equalto', selected_student_id) | first %}
+      <h2>{{ student.name }}</h2>
+      <form method="post"
+            action="/sessions/{{ workspace.session.session_id }}/{{ workspace.session.session_type }}/{{ selected_student_id }}"
+            class="feedback-form">
+        <fieldset>
+          <legend>量化评分（1–5）</legend>
+          {% for field in rating_fields %}
+            <div class="rating">
+              <span class="rating-label">{{ rating_labels[field] }}</span>
+              {% for n in [1, 2, 3, 4, 5] %}
+                <label class="rating-option">
+                  <input type="radio" name="{{ field }}" value="{{ n }}"
+                         {% if form[field] | string == n | string %}checked{% endif %} required>
+                  {{ n }}
+                </label>
+              {% endfor %}
+            </div>
+          {% endfor %}
+        </fieldset>
+
+        {% for category, label, indicators in sections %}
+          <fieldset>
+            <legend>{{ label }}</legend>
+            {% for ind in indicators %}
+              <label class="checkbox">
+                <input type="checkbox" name="{{ 'progress_indicators' if 'progress' in category else 'weak_indicators' }}"
+                       value="{{ ind.indicator_id }}"
+                       {% if ind.indicator_id in selected_ids %}checked{% endif %}>
+                {{ ind.text }}
+              </label>
+            {% endfor %}
+          </fieldset>
+        {% endfor %}
+
+        <fieldset>
+          <legend>补充备注</legend>
+          <textarea name="note" rows="3">{{ form.note }}</textarea>
+        </fieldset>
+
+        <button type="submit">保存并填写下一位</button>
+      </form>
     {% else %}
       <p class="muted">暂无学生可填写</p>
     {% endif %}
   </section>
 </div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/workspace.js"></script>
 {% endblock %}

@@ -98,6 +98,15 @@ def daily_session(db_session, classroom, teacher) -> ClassSession:
 
 @pytest.fixture()
 def special_session(db_session, classroom, teacher) -> ClassSession:
+    student = Student(
+        student_id="S1", name="李明", grade="三年级", current_stage="三阶", status="active"
+    )
+    db_session.add(student)
+    db_session.commit()
+    db_session.add(
+        Enrollment(student_id="S1", class_id=classroom.class_id, start_date="2026-09-01", status="active")
+    )
+    db_session.commit()
     row = ClassSession(
         session_id="SESSION2",
         class_id=classroom.class_id,
@@ -106,6 +115,62 @@ def special_session(db_session, classroom, teacher) -> ClassSession:
         course_name="数学思维",
         session_date="2026-09-05",
         start_time="17:30",
+        status="active",
+    )
+    db_session.add(row)
+    db_session.commit()
+    return row
+
+
+@pytest.fixture()
+def daily_session_one_student(db_session, classroom, teacher) -> ClassSession:
+    student = Student(
+        student_id="S1", name="李明", grade="三年级", current_stage="三阶", status="active"
+    )
+    db_session.add(student)
+    db_session.commit()
+    db_session.add(
+        Enrollment(student_id="S1", class_id=classroom.class_id, start_date="2026-09-01", status="active")
+    )
+    db_session.commit()
+    row = ClassSession(
+        session_id="SESSION1",
+        class_id=classroom.class_id,
+        teacher_id=teacher.teacher_id,
+        session_type="daily",
+        course_name=None,
+        session_date="2026-09-05",
+        start_time="16:30",
+        status="active",
+    )
+    db_session.add(row)
+    db_session.commit()
+    return row
+
+
+@pytest.fixture()
+def daily_session_two_students(db_session, classroom, teacher) -> ClassSession:
+    s1 = Student(
+        student_id="S1", name="李明", grade="三年级", current_stage="三阶", status="active"
+    )
+    s2 = Student(
+        student_id="S2", name="王芳", grade="三年级", current_stage="三阶", status="active"
+    )
+    db_session.add_all([s1, s2])
+    db_session.commit()
+    db_session.add_all([
+        Enrollment(student_id="S1", class_id=classroom.class_id, start_date="2026-09-01", status="active"),
+        Enrollment(student_id="S2", class_id=classroom.class_id, start_date="2026-09-01", status="active"),
+    ])
+    db_session.commit()
+    row = ClassSession(
+        session_id="SESSION1",
+        class_id=classroom.class_id,
+        teacher_id=teacher.teacher_id,
+        session_type="daily",
+        course_name=None,
+        session_date="2026-09-05",
+        start_time="16:30",
         status="active",
     )
     db_session.add(row)
