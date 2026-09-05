@@ -116,6 +116,8 @@ def _workspace_context(
     return {
         "workspace": workspace,
         "selected_student_id": selected,
+        "completed": sum(1 for s in workspace.statuses.values() if s == "已填写"),
+        "total": len(workspace.roster),
         "sections": [
             (cat, CATEGORY_LABELS[cat], indicator_groups[cat]) for cat in categories
         ],

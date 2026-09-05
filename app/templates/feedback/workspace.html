@@ -6,6 +6,7 @@
   {{ '晚辅' if workspace.session.session_type == 'daily' else '专项' }} ·
   {{ workspace.session.session_date }} {{ workspace.session.start_time }}
   {% if workspace.session.course_name %}· {{ workspace.session.course_name }}{% endif %}
+  · {{ completed }} / {{ total }} 已完成
 </p>
 
 <div class="workspace">

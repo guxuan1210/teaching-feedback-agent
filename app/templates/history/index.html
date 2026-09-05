@@ -42,7 +42,7 @@
 
 <table>
   <thead>
-    <tr><th>学生</th><th>班级</th><th>类型</th><th>日期</th><th>评分</th><th>状态</th><th>操作</th></tr>
+    <tr><th>学生</th><th>班级</th><th>类型</th><th>日期</th><th>评分</th><th>备注</th><th>状态</th><th>操作</th></tr>
   </thead>
   <tbody>
     {% for row in rows %}
@@ -56,11 +56,12 @@
             {{ RATING_LABELS[row.feedback_type][field] }}{{ value }}
           {% endfor %}
         </td>
+        <td>{{ row.note or '—' }}</td>
         <td>{{ '已作废' if row.status == 'void' else '正常' }}</td>
         <td><a href="/history/{{ row.feedback_type }}/{{ row.feedback_id }}">查看／编辑</a></td>
       </tr>
     {% else %}
-      <tr><td colspan="7">暂无匹配记录</td></tr>
+      <tr><td colspan="8">暂无匹配记录</td></tr>
     {% endfor %}
   </tbody>
 </table>
