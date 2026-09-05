@@ -93,6 +93,7 @@ def _workspace_context(
     form: dict | None = None,
     selected_ids: set[str] | None = None,
     errors: list[str] | None = None,
+    selected_student_id: str | None = None,
 ) -> dict:
     workspace = sessions_repository.get_session_with_roster(db, session_id)
     is_daily = workspace.session.session_type == "daily"
@@ -100,7 +101,7 @@ def _workspace_context(
     indicator_groups = service.indicators_by_category(db, categories)
 
     roster_ids = [s.student_id for s in workspace.roster]
-    selected = request.query_params.get("student_id")
+    selected = selected_student_id or request.query_params.get("student_id")
     if selected not in roster_ids:
         selected = next(
             (s.student_id for s in workspace.roster if workspace.statuses.get(s.student_id) != "已填写"),
@@ -161,7 +162,7 @@ def _save(
     try:
         ratings = {field: int(form[field]) for field in fields}
     except (ValueError, TypeError):
-        return _render_error(request, db, session_id, form, progress, weak, "评分必须是1到5")
+        return _render_error(request, db, session_id, student_id, form, progress, weak, "评分必须是1到5")
 
     values = (
         DailyFeedbackInput(
@@ -187,7 +188,7 @@ def _save(
         else:
             service.save_special_feedback(db, session_id, student_id, values)
     except ValueError as exc:
-        return _render_error(request, db, session_id, form, progress, weak, str(exc))
+        return _render_error(request, db, session_id, student_id, form, progress, weak, str(exc))
 
     next_id = service.next_unfinished_student(db, session_id, student_id)
     if next_id:
@@ -199,15 +200,31 @@ def _render_error(
     request: Request,
     db: Session,
     session_id: str,
+    student_id: str,
     form: dict,
     progress: list[str],
     weak: list[str],
     message: str,
 ):
     selected_ids = set(progress) | set(weak)
-    context = _workspace_context(
-        request, db, session_id, form=form, selected_ids=selected_ids, errors=[message]
-    )
+    try:
+        context = _workspace_context(
+            request, db, session_id, form=form, selected_ids=selected_ids,
+            errors=[message], selected_student_id=student_id,
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request, "today.html",
+            {
+                "on_date": "",
+                "sessions": [],
+                "classes": [],
+                "teachers": [],
+                "form": {},
+                "errors": [str(exc)],
+            },
+            status_code=404,
+        )
     return templates.TemplateResponse(
         request, "feedback/workspace.html", context, status_code=422
     )

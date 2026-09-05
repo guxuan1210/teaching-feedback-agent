@@ -1,4 +1,4 @@
-"""Today page, session creation, and the batch workspace shell."""
+"""Today page and session creation."""
 
 from __future__ import annotations
 
