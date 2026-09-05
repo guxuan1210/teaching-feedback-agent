@@ -1,0 +1,95 @@
+/* Local-only stylesheet: no fonts, icons, or scripts are loaded from a CDN. */
+
+:root {
+  --text: #1f2937;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --accent: #2563eb;
+  --bg-soft: #f9fafb;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: system-ui, sans-serif;
+  margin: 2rem;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+nav { margin-bottom: 1.5rem; }
+nav a {
+  margin-right: 1rem;
+  text-decoration: none;
+  color: var(--accent);
+}
+
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input, select, button, textarea {
+  min-height: 44px;
+  padding: 0.3rem 0.5rem;
+  margin: 0.2rem;
+  font: inherit;
+}
+
+button { cursor: pointer; }
+
+.flash {
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  border-radius: 6px;
+}
+.flash.success { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; }
+.flash.error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+.flash.error p { margin: 0.25rem 0; }
+
+table { border-collapse: collapse; width: 100%; margin-top: 1.5rem; }
+th, td { border: 1px solid var(--border); padding: 0.5rem; text-align: left; }
+th { background: var(--bg-soft); }
+
+form.inline { display: inline; }
+
+.create-form { background: var(--bg-soft); padding: 1rem; border-radius: 6px; }
+
+.workspace { display: flex; gap: 2rem; align-items: flex-start; }
+.roster { flex: 0 0 240px; }
+.roster ul { list-style: none; padding: 0; }
+.roster li { margin: 0.25rem 0; }
+.roster li.active a { font-weight: 700; color: var(--text); }
+.form-area { flex: 1; }
+
+.chip {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #374151;
+}
+
+fieldset { margin: 1rem 0; border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; }
+legend { font-weight: 600; }
+
+.rating { margin: 0.5rem 0; }
+.rating-label { display: inline-block; min-width: 6rem; }
+.rating-option { margin-right: 0.75rem; }
+.checkbox { display: block; margin: 0.25rem 0; }
+.muted { color: var(--muted); }
+
+@media (max-width: 800px) {
+  .workspace { flex-direction: column; }
+  .roster { flex: none; width: 100%; }
+}
+
+@media print {
+  nav, .create-form, button { display: none; }
+  table, th, td { border-color: #000; }
+  tr { break-inside: avoid; }
+}
