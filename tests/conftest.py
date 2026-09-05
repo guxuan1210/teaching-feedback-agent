@@ -348,3 +348,52 @@ def mixed_feedback(db_session) -> None:
                         rating_skill=4, rating_habit=4, note=None, status="active"),
     ])
     db_session.commit()
+
+
+@pytest.fixture()
+def void_feedback(db_session) -> None:
+    teacher = Teacher(teacher_id="T1", name="王老师", role="晚辅教师", status="active")
+    db_session.add(teacher)
+    db_session.commit()
+
+    klass = Class(
+        class_id="C1", name="三年级A班", grade="三年级", class_type="daily",
+        head_teacher_id="T1", status="active",
+    )
+    db_session.add(klass)
+    db_session.commit()
+
+    db_session.add_all([
+        Student(student_id="S1", name="李明", grade="三年级", current_stage="三阶", status="active"),
+        Student(student_id="S2", name="王芳", grade="三年级", current_stage="三阶", status="active"),
+    ])
+    db_session.commit()
+
+    db_session.add_all([
+        Enrollment(student_id="S1", class_id="C1", start_date="2026-09-01", status="active"),
+        Enrollment(student_id="S2", class_id="C1", start_date="2026-09-01", status="active"),
+    ])
+    db_session.commit()
+
+    session = ClassSession(
+        session_id="SESSION1",
+        class_id="C1",
+        teacher_id="T1",
+        session_type="daily",
+        course_name=None,
+        session_date="2026-09-05",
+        start_time="16:30",
+        status="active",
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    db_session.add_all([
+        DailyFeedback(feedback_id="F-ACTIVE", session_id="SESSION1", student_id="S1",
+                      rating_knowledge=4, rating_habit=4, rating_mindset=4,
+                      note=None, status="active"),
+        DailyFeedback(feedback_id="F-VOID", session_id="SESSION1", student_id="S2",
+                      rating_knowledge=3, rating_habit=3, rating_mindset=3,
+                      note=None, status="void"),
+    ])
+    db_session.commit()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -70,12 +71,19 @@ def _index_context(
 ) -> dict:
     if filters is None:
         filters = _parse_filters(request)
+    params = {
+        key: value
+        for key in ("date_from", "date_to", "session_type", "class_id", "student_id", "status")
+        if (value := getattr(filters, key))
+    }
+    query_string = ("?" + urlencode(params)) if params else ""
     return {
         "rows": service.query_history(db, filters),
         "filters": filters,
         "classes": catalog_repository.list_classes(db),
         "students": catalog_repository.list_students(db),
         "RATING_LABELS": RATING_LABELS,
+        "export_url": "/export.xlsx" + query_string,
         "errors": errors or [],
     }
 

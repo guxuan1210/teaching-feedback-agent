@@ -222,6 +222,8 @@ class HistoryRow:
     status: str
     indicator_ids: list[str]
     indicator_texts: list[str]
+    created_at: str
+    updated_at: str
 
 
 def _ratings_for(feedback, feedback_type: str) -> dict[str, int]:
@@ -310,6 +312,8 @@ def query_history(db: Session, filters: HistoryFilters) -> list[HistoryRow]:
                     status=feedback.status,
                     indicator_ids=indicator_ids,
                     indicator_texts=_indicator_texts(db, indicator_ids),
+                    created_at=feedback.created_at,
+                    updated_at=feedback.updated_at,
                 )
             )
     return rows
