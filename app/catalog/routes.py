@@ -75,7 +75,7 @@ def students_create(
     form = {"name": name, "grade": grade, "current_stage": current_stage}
     try:
         student = repository.create_student(
-            session, name=name, grade=grade or None, current_stage=current_stage or None
+            session, name=name, grade=grade, current_stage=current_stage
         )
     except ValueError as exc:
         return templates.TemplateResponse(
@@ -130,7 +130,7 @@ def students_update(
     form = {"name": name, "grade": grade, "current_stage": current_stage}
     try:
         repository.update_student(
-            session, student_id, name=name, grade=grade or None, current_stage=current_stage or None
+            session, student_id, name=name, grade=grade, current_stage=current_stage
         )
     except ValueError as exc:
         return templates.TemplateResponse(
@@ -204,8 +204,8 @@ def classes_create(
             session,
             name=name,
             class_type=class_type,
-            grade=grade or None,
-            head_teacher_id=head_teacher_id or None,
+            grade=grade,
+            head_teacher_id=head_teacher_id,
         )
     except ValueError as exc:
         return templates.TemplateResponse(
@@ -262,8 +262,8 @@ def classes_update(
             class_id,
             name=name,
             class_type=class_type,
-            grade=grade or None,
-            head_teacher_id=head_teacher_id or None,
+            grade=grade,
+            head_teacher_id=head_teacher_id,
         )
     except ValueError as exc:
         return templates.TemplateResponse(
@@ -321,7 +321,7 @@ def teachers_create(
 ):
     form = {"name": name, "role": role}
     try:
-        teacher = repository.create_teacher(session, name=name, role=role or None)
+        teacher = repository.create_teacher(session, name=name, role=role)
     except ValueError as exc:
         return templates.TemplateResponse(
             request,
@@ -364,7 +364,7 @@ def teachers_update(
 ):
     form = {"name": name, "role": role}
     try:
-        repository.update_teacher(session, teacher_id, name=name, role=role or None)
+        repository.update_teacher(session, teacher_id, name=name, role=role)
     except ValueError as exc:
         return templates.TemplateResponse(
             request,

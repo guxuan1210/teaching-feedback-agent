@@ -20,6 +20,10 @@ from app.core.ids import new_id
 CLASS_TYPES = {"daily", "special"}
 STATUS_VALUES = {"active", "inactive"}
 
+# Distinguishes "field not sent" (leave unchanged) from "field sent empty"
+# (clear to NULL) in update functions.
+_UNSET = object()
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -69,17 +73,17 @@ def update_student(
     session: Session,
     student_id: str,
     name: str | None = None,
-    grade: str | None = None,
-    current_stage: str | None = None,
+    grade: str | None = _UNSET,
+    current_stage: str | None = _UNSET,
 ) -> Student:
     student = session.get(Student, student_id)
     if student is None:
         raise ValueError("学生不存在")
     if name is not None:
         student.name = _clean_name(name)
-    if grade is not None:
+    if grade is not _UNSET:
         student.grade = _optional(grade)
-    if current_stage is not None:
+    if current_stage is not _UNSET:
         student.current_stage = _optional(current_stage)
     student.updated_at = _utcnow()
     session.commit()
@@ -134,8 +138,8 @@ def update_class(
     class_id: str,
     name: str | None = None,
     class_type: str | None = None,
-    grade: str | None = None,
-    head_teacher_id: str | None = None,
+    grade: str | None = _UNSET,
+    head_teacher_id: str | None = _UNSET,
 ) -> Class:
     klass = session.get(Class, class_id)
     if klass is None:
@@ -146,9 +150,9 @@ def update_class(
         if class_type not in CLASS_TYPES:
             raise ValueError(f"课程类型无效：{class_type}")
         klass.class_type = class_type
-    if grade is not None:
+    if grade is not _UNSET:
         klass.grade = _optional(grade)
-    if head_teacher_id is not None:
+    if head_teacher_id is not _UNSET:
         klass.head_teacher_id = _optional(head_teacher_id)
     klass.updated_at = _utcnow()
     session.commit()
@@ -195,14 +199,14 @@ def update_teacher(
     session: Session,
     teacher_id: str,
     name: str | None = None,
-    role: str | None = None,
+    role: str | None = _UNSET,
 ) -> Teacher:
     teacher = session.get(Teacher, teacher_id)
     if teacher is None:
         raise ValueError("教师不存在")
     if name is not None:
         teacher.name = _clean_name(name)
-    if role is not None:
+    if role is not _UNSET:
         teacher.role = _optional(role)
     teacher.updated_at = _utcnow()
     session.commit()
