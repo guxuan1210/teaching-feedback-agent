@@ -20,6 +20,27 @@ def test_overlapping_enrollment_is_rejected(db_session, student, classroom):
         enroll_student(db_session, student.student_id, classroom.class_id, date(2026, 9, 5))
 
 
+def test_inactive_student_or_class_is_rejected(db_session, student, classroom):
+    student.status = "inactive"
+    db_session.commit()
+    with pytest.raises(ValueError, match="学生已停用"):
+        enroll_student(db_session, student.student_id, classroom.class_id, date(2026, 9, 1))
+
+    student.status = "active"
+    classroom.status = "inactive"
+    db_session.commit()
+    with pytest.raises(ValueError, match="班级已停用"):
+        enroll_student(db_session, student.student_id, classroom.class_id, date(2026, 9, 1))
+
+
+def test_invalid_start_date_via_http_returns_422(client, student, classroom):
+    response = client.post("/catalog/enrollments", data={
+        "student_id": student.student_id, "class_id": classroom.class_id,
+        "start_date": "not-a-date",
+    })
+    assert response.status_code == 422
+
+
 def test_leave_rejects_end_date_before_start(db_session, student, classroom):
     enrollment = enroll_student(db_session, student.student_id, classroom.class_id, date(2026, 9, 10))
     with pytest.raises(ValueError, match="离班日期不能早于入班日期"):

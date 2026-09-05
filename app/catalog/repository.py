@@ -232,10 +232,16 @@ def enroll_student(
     class_id: str,
     start_date: date,
 ) -> Enrollment:
-    if session.get(Student, student_id) is None:
+    student = session.get(Student, student_id)
+    if student is None:
         raise ValueError("学生不存在")
-    if session.get(Class, class_id) is None:
+    if student.status != "active":
+        raise ValueError("学生已停用")
+    klass = session.get(Class, class_id)
+    if klass is None:
         raise ValueError("班级不存在")
+    if klass.status != "active":
+        raise ValueError("班级已停用")
     new_start = start_date.isoformat()
     existing = session.scalars(
         select(Enrollment).where(
