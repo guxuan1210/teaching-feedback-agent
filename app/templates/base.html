@@ -7,26 +7,44 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <nav>
-    <a href="/">今日填写</a>
-    <a href="/history">历史记录</a>
-    <a href="/catalog">基础信息</a>
-    <a href="/catalog/students">学生</a>
-    <a href="/catalog/classes">班级</a>
-    <a href="/catalog/teachers">教师</a>
-    <a href="/catalog/enrollments">报名管理</a>
-  </nav>
-
-  {% if created %}
-    <div class="flash success">已创建记录 ID：{{ created }}</div>
-  {% endif %}
-  {% if errors %}
-    <div class="flash error">
-      {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+  <header class="site">
+    <div class="site-top">
+      <div>
+        <a class="brand" href="/">教学反馈数据采集</a>
+        <div class="brand-sub">晚辅 · 专项 · 量化反馈</div>
+      </div>
+      {% if request.session.get('teacher_id') %}
+        <div class="site-user">
+          <span class="site-user-name">{{ request.session.get('teacher_name') }}</span>
+          <a href="/logout">退出</a>
+        </div>
+      {% endif %}
     </div>
-  {% endif %}
+    <nav class="site-nav">
+      <a href="/">今日填写</a>
+      <a href="/history">历史记录</a>
+      {% if request.session.get('is_admin') %}
+        <a href="/catalog">基础信息</a>
+        <a href="/catalog/students">学生</a>
+        <a href="/catalog/classes">班级</a>
+        <a href="/catalog/teachers">教师</a>
+        <a href="/catalog/enrollments">报名管理</a>
+      {% endif %}
+    </nav>
+  </header>
 
-  {% block content %}{% endblock %}
+  <main>
+    {% if created %}
+      <div class="flash success">已创建记录 ID：{{ created }}</div>
+    {% endif %}
+    {% if errors %}
+      <div class="flash error">
+        {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+      </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
   {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -9,6 +9,8 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 
 from app.catalog import repository as catalog_repository
+from app.catalog.models import Teacher
+from app.core.auth import is_admin
 from app.feedback.service import HistoryFilters, query_history
 
 
@@ -19,23 +21,37 @@ def _style_sheet(ws, widths: list[int]) -> None:
     ws.auto_filter.ref = ws.dimensions
 
 
-def build_workbook(db: Session, filters: HistoryFilters) -> bytes:
+def build_workbook(db: Session, filters: HistoryFilters, teacher: Teacher | None = None) -> bytes:
     rows = query_history(db, filters)
     daily_rows = [r for r in rows if r.feedback_type == "daily"]
     special_rows = [r for r in rows if r.feedback_type == "special"]
+
+    if teacher is not None and not is_admin(teacher):
+        students = catalog_repository.list_students_for_teacher(db, teacher.teacher_id)
+        classes = catalog_repository.list_classes_for_teacher(db, teacher.teacher_id)
+    else:
+        students = catalog_repository.list_students(db)
+        classes = catalog_repository.list_classes(db)
 
     book = Workbook()
 
     ws_students = book.active
     ws_students.title = "学生"
-    ws_students.append(["学生ID", "姓名", "年级", "九阶阶段", "状态"])
-    for s in catalog_repository.list_students(db):
-        ws_students.append([s.student_id, s.name, s.grade or "", s.current_stage or "", s.status])
-    _style_sheet(ws_students, [22, 12, 10, 12, 10])
+    ws_students.append(["学生ID", "姓名", "年级", "九阶阶段", "晚辅档位", "状态"])
+    for s in students:
+        ws_students.append([
+            s.student_id,
+            s.name,
+            s.grade or "",
+            s.current_stage or "",
+            s.late_care_level or "",
+            s.status,
+        ])
+    _style_sheet(ws_students, [22, 12, 10, 12, 14, 10])
 
     ws_classes = book.create_sheet("班级")
     ws_classes.append(["班级ID", "名称", "年级", "类型", "状态"])
-    for c in catalog_repository.list_classes(db):
+    for c in classes:
         ws_classes.append([c.class_id, c.name, c.grade or "", c.class_type, c.status])
     _style_sheet(ws_classes, [22, 16, 10, 10, 10])
 

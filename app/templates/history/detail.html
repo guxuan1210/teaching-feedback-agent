@@ -50,6 +50,6 @@
 
 <form method="post" action="/history/{{ row.feedback_type }}/{{ row.feedback_id }}/void"
       onsubmit="return confirm('确定作废这条记录吗？');" class="inline">
-  <button type="submit">作废记录</button>
+  <button type="submit" class="danger">作废记录</button>
 </form>
 {% endblock %}

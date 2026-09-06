@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+from app.catalog.models import Teacher
+from app.core.auth import is_admin, require_login
 from app.core.database import get_db
 from app.export import service
 from app.feedback.service import HistoryFilters
@@ -17,7 +19,11 @@ router = APIRouter(tags=["export"])
 
 
 @router.get("/export.xlsx")
-def export_workbook(request: Request, db: Session = Depends(get_db)):
+def export_workbook(
+    request: Request,
+    teacher: Teacher = Depends(require_login),
+    db: Session = Depends(get_db),
+):
     q = request.query_params
     filters = HistoryFilters(
         date_from=q.get("date_from") or None,
@@ -26,8 +32,9 @@ def export_workbook(request: Request, db: Session = Depends(get_db)):
         class_id=q.get("class_id") or None,
         student_id=q.get("student_id") or None,
         status=q.get("status") or None,
+        teacher_id=None if is_admin(teacher) else teacher.teacher_id,
     )
-    content = service.build_workbook(db, filters)
+    content = service.build_workbook(db, filters, teacher=teacher)
     filename = quote(f"教学反馈_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
     return Response(
         content=content,

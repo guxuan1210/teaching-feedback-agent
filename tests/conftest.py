@@ -44,6 +44,7 @@ def db_session(engine):
 def client(database_url: str):
     application = create_app(database_url=database_url)
     with TestClient(application) as test_client:
+        test_client.post("/login", data={"name": "管理员", "password": "admin123"})
         yield test_client
 
 

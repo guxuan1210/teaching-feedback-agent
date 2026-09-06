@@ -11,7 +11,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class Base(DeclarativeBase):
@@ -61,19 +61,42 @@ def _import_all_models() -> None:
     from app.feedback import models as feedback_models  # noqa: F401
 
 
+def _add_missing_columns(engine: Engine) -> None:
+    """Additive migrations for columns introduced after the initial schema.
+
+    ``create_all`` only creates missing tables, not missing columns, so a
+    pre-existing demo database needs a lightweight ALTER. Each migration checks
+    the current column set first and is therefore idempotent.
+    """
+    with engine.begin() as conn:
+        teacher_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(teacher)")}
+        if "password_hash" not in teacher_cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE teacher ADD COLUMN password_hash VARCHAR"
+            )
+        student_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(student)")}
+        if "late_care_level" not in student_cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE student ADD COLUMN late_care_level VARCHAR"
+            )
+
+
 def initialize_database(engine: Engine) -> None:
     """Create all tables and verify/set the schema version pragma."""
+    with engine.connect() as conn:
+        current = conn.exec_driver_sql("PRAGMA user_version").scalar_one()
+    if current > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"schema version mismatch: database has {current}, "
+            f"expected at most {SCHEMA_VERSION}"
+        )
+
     _import_all_models()
     Base.metadata.create_all(engine)
+    _add_missing_columns(engine)
 
-    with engine.begin() as conn:
-        current = conn.exec_driver_sql("PRAGMA user_version").scalar_one()
-        if current != SCHEMA_VERSION:
-            if current != 0:
-                raise RuntimeError(
-                    f"schema version mismatch: database has {current}, "
-                    f"expected {SCHEMA_VERSION}"
-                )
+    if current < SCHEMA_VERSION:
+        with engine.begin() as conn:
             conn.exec_driver_sql(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -82,14 +105,12 @@ def _indicator_seed_path() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "db" / "seed_indicators.sql"
 
 
-def seed_indicators(engine: Engine) -> None:
-    """Seed the indicator dictionary using insert-missing semantics.
+def _reference_seed_path() -> Path:
+    return Path(__file__).resolve().parent.parent.parent / "db" / "seed_reference_data.sql"
 
-    ``db/seed_indicators.sql`` uses ``INSERT OR IGNORE`` so existing rows are
-    never overwritten. Every statement runs inside a single transaction so a
-    partial failure leaves the indicator table unchanged.
-    """
-    script = _indicator_seed_path().read_text(encoding="utf-8")
+
+def _run_seed_script(engine: Engine, path: Path) -> None:
+    script = path.read_text(encoding="utf-8")
 
     statements: list[str] = []
     for chunk in script.split(";"):
@@ -104,6 +125,21 @@ def seed_indicators(engine: Engine) -> None:
             conn.exec_driver_sql(stmt)
 
 
+def seed_indicators(engine: Engine) -> None:
+    """Seed the indicator dictionary using insert-missing semantics.
+
+    ``db/seed_indicators.sql`` uses ``INSERT OR IGNORE`` so existing rows are
+    never overwritten. Every statement runs inside a single transaction so a
+    partial failure leaves the indicator table unchanged.
+    """
+    _run_seed_script(engine, _indicator_seed_path())
+
+
+def seed_reference_data(engine: Engine) -> None:
+    """Seed stages, late-care levels, and admission-assessment rubrics."""
+    _run_seed_script(engine, _reference_seed_path())
+
+
 def get_db(request: Request) -> Iterator[Session]:
     """FastAPI dependency that yields a scoped session for one request."""
     factory: sessionmaker = request.app.state.session_factory
@@ -112,3 +148,37 @@ def get_db(request: Request) -> Iterator[Session]:
         yield session
     finally:
         session.close()
+
+
+DEFAULT_ADMIN_PASSWORD = "admin123"
+
+
+def seed_admin(engine: Engine) -> None:
+    """Create a default admin account on first run so the app is usable.
+
+    Only inserts when no ``管理员``-role teacher exists yet, so it never
+    overrides accounts created later. The default password is for the local
+    demo only.
+    """
+    from sqlalchemy import select
+
+    from app.catalog.models import Teacher
+    from app.core.security import hash_password
+
+    factory = build_session_factory(engine)
+    with factory() as session:
+        existing = session.scalar(
+            select(Teacher).where(Teacher.role == "管理员").limit(1)
+        )
+        if existing is not None:
+            return
+        session.add(
+            Teacher(
+                teacher_id="ADMIN",
+                name="管理员",
+                role="管理员",
+                password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
+                status="active",
+            )
+        )
+        session.commit()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, String
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -20,6 +20,7 @@ class Teacher(Base):
     teacher_id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     role: Mapped[str | None] = mapped_column(String)
+    password_hash: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
     created_at: Mapped[str] = mapped_column(String, nullable=False, default=_utcnow)
     updated_at: Mapped[str] = mapped_column(
@@ -38,6 +39,7 @@ class Student(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     grade: Mapped[str | None] = mapped_column(String)
     current_stage: Mapped[str | None] = mapped_column(String)
+    late_care_level: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
     created_at: Mapped[str] = mapped_column(String, nullable=False, default=_utcnow)
     updated_at: Mapped[str] = mapped_column(
@@ -46,6 +48,60 @@ class Student(Base):
 
     __table_args__ = (
         CheckConstraint("status IN ('active','inactive')", name="ck_student_status"),
+    )
+
+
+class StageDict(Base):
+    __tablename__ = "stage_dict"
+
+    stage_id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class LateCareLevelDict(Base):
+    __tablename__ = "late_care_level_dict"
+
+    level_id: Mapped[str] = mapped_column(String, primary_key=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class AssessmentModule(Base):
+    __tablename__ = "assessment_module"
+
+    module_id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class AssessmentDimension(Base):
+    __tablename__ = "assessment_dimension"
+
+    dimension_id: Mapped[str] = mapped_column(String, primary_key=True)
+    module_id: Mapped[str] = mapped_column(
+        String, ForeignKey("assessment_module.module_id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class AssessmentScoreAnchor(Base):
+    __tablename__ = "assessment_score_anchor"
+
+    dimension_id: Mapped[str] = mapped_column(
+        String, ForeignKey("assessment_dimension.dimension_id"), primary_key=True
+    )
+    score: Mapped[int] = mapped_column(Integer, primary_key=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("score BETWEEN 0 AND 5", name="ck_assessment_anchor_score"),
     )
 
 

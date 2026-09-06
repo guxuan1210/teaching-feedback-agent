@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}登录{% endblock %}
+{% block content %}
+<div class="login-card">
+  <h1>登录</h1>
+  <form method="post" action="/login">
+    <label>姓名 <input type="text" name="name" required autofocus></label>
+    <label>密码 <input type="password" name="password" required></label>
+    <button type="submit">登录</button>
+  </form>
+  <p class="muted">初始管理员：管理员 / admin123（登录后请尽快修改）</p>
+</div>
+{% endblock %}

@@ -1,7 +1,7 @@
 -- =====================================================================
 -- 教学反馈数据采集 Demo · 数据库 Schema（SQLite）
 -- 本文件是可执行 SQLAlchemy 模型（app/*/models.py）的忠实镜像，
--- 共 10 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
+-- 共 15 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
 -- =====================================================================
 
 PRAGMA foreign_keys = ON;
@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS teacher (
     teacher_id TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
     role       TEXT,
+    password_hash TEXT,
     status     TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS student (
     name          TEXT NOT NULL,
     grade         TEXT,
     current_stage TEXT,
+    late_care_level TEXT,
     status        TEXT NOT NULL DEFAULT 'active',
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -34,7 +36,54 @@ CREATE TABLE IF NOT EXISTS student (
 );
 
 -- ---------------------------------------------------------------------
--- 3. 班级 Class
+-- 3. 九阶阶段字典
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS stage_dict (
+    stage_id   TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    summary    TEXT NOT NULL,
+    goal       TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    active     INTEGER NOT NULL DEFAULT 1
+);
+
+-- ---------------------------------------------------------------------
+-- 4. 晚辅档位字典
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS late_care_level_dict (
+    level_id   TEXT PRIMARY KEY,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    active     INTEGER NOT NULL DEFAULT 1
+);
+
+-- ---------------------------------------------------------------------
+-- 5. 入学测评模块、维度与评分锚点
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS assessment_module (
+    module_id  TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    active     INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS assessment_dimension (
+    dimension_id TEXT PRIMARY KEY,
+    module_id    TEXT NOT NULL REFERENCES assessment_module(module_id),
+    name         TEXT NOT NULL,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    active       INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS assessment_score_anchor (
+    dimension_id TEXT NOT NULL REFERENCES assessment_dimension(dimension_id),
+    score        INTEGER NOT NULL,
+    description  TEXT NOT NULL,
+    PRIMARY KEY (dimension_id, score),
+    CHECK (score BETWEEN 0 AND 5)
+);
+
+-- ---------------------------------------------------------------------
+-- 6. 班级 Class
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS class (
     class_id        TEXT PRIMARY KEY,
@@ -50,7 +99,7 @@ CREATE TABLE IF NOT EXISTS class (
 );
 
 -- ---------------------------------------------------------------------
--- 4. 学生—班级关系 Enrollment（有效日期）
+-- 7. 学生—班级关系 Enrollment（有效日期）
 --    同一学生可在同一班级有多段不重叠的入班历史，故不使用
 --    UNIQUE(student_id, class_id)。end_date 为空表示当前在班。
 -- ---------------------------------------------------------------------
@@ -68,7 +117,7 @@ CREATE TABLE IF NOT EXISTS enrollment (
 );
 
 -- ---------------------------------------------------------------------
--- 5. 课程场次 ClassSession
+-- 8. 课程场次 ClassSession
 --    定义「一课」：班级、老师、课程类型和日期在反馈中不重复解释。
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS class_session (
@@ -87,7 +136,7 @@ CREATE TABLE IF NOT EXISTS class_session (
 );
 
 -- ---------------------------------------------------------------------
--- 6. 指标字典 Indicator
+-- 9. 指标字典 Indicator
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS indicator (
     indicator_id TEXT PRIMARY KEY,
@@ -99,7 +148,7 @@ CREATE TABLE IF NOT EXISTS indicator (
 CREATE INDEX IF NOT EXISTS idx_indicator_cat ON indicator(category);
 
 -- ---------------------------------------------------------------------
--- 7. 晚辅每日反馈 DailyFeedback
+-- 10. 晚辅每日反馈 DailyFeedback
 --    三项评分 1-5；同一场次同一学生唯一。
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS daily_feedback (
@@ -121,7 +170,7 @@ CREATE TABLE IF NOT EXISTS daily_feedback (
 );
 
 -- ---------------------------------------------------------------------
--- 8. 专项课反馈 SpecialFeedback
+-- 11. 专项课反馈 SpecialFeedback
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS special_feedback (
     feedback_id  TEXT PRIMARY KEY,
@@ -140,7 +189,7 @@ CREATE TABLE IF NOT EXISTS special_feedback (
 );
 
 -- ---------------------------------------------------------------------
--- 9. 晚辅反馈 ↔ 指标 多对多
+-- 12. 晚辅反馈 ↔ 指标 多对多
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS daily_feedback_indicator (
     feedback_id  TEXT NOT NULL REFERENCES daily_feedback(feedback_id) ON DELETE CASCADE,
@@ -149,7 +198,7 @@ CREATE TABLE IF NOT EXISTS daily_feedback_indicator (
 );
 
 -- ---------------------------------------------------------------------
--- 10. 专项反馈 ↔ 指标 多对多
+-- 13. 专项反馈 ↔ 指标 多对多
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS special_feedback_indicator (
     feedback_id  TEXT NOT NULL REFERENCES special_feedback(feedback_id) ON DELETE CASCADE,

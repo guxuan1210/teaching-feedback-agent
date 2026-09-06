@@ -18,12 +18,13 @@ from sqlalchemy.orm import Session
 
 from app.catalog import repository
 from app.catalog.models import Class, Student, Teacher
+from app.core.auth import require_admin
 from app.core.database import get_db
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-router = APIRouter(prefix="/catalog", tags=["catalog"])
+router = APIRouter(prefix="/catalog", tags=["catalog"], dependencies=[Depends(require_admin)])
 
 
 # ---------------------------------------------------------------------------
@@ -45,9 +46,29 @@ def _students_context(
     record_id: str | None = None,
     errors: list[str] | None = None,
 ) -> dict:
+    stages = repository.list_active_stages(session)
+    late_care_levels = repository.list_active_late_care_levels(session)
+    valid_stage_ids = {stage.stage_id for stage in stages}
+    valid_level_ids = {level.level_id for level in late_care_levels}
     return {
         "students": repository.list_students(session),
+        "stages": stages,
+        "late_care_levels": late_care_levels,
         "form": form,
+        "legacy_stage": (
+            form.get("current_stage")
+            if editing
+            and form.get("current_stage")
+            and form.get("current_stage") not in valid_stage_ids
+            else None
+        ),
+        "legacy_late_care_level": (
+            form.get("late_care_level")
+            if editing
+            and form.get("late_care_level")
+            and form.get("late_care_level") not in valid_level_ids
+            else None
+        ),
         "editing": editing,
         "record_id": record_id,
         "action_url": f"/catalog/students/{record_id}" if editing else "/catalog/students",
@@ -61,7 +82,11 @@ def students_page(request: Request, session: Session = Depends(get_db)):
     return templates.TemplateResponse(
         request,
         "catalog/students.html",
-        _students_context(request, session, {"name": "", "grade": "", "current_stage": ""}),
+        _students_context(
+            request,
+            session,
+            {"name": "", "grade": "", "current_stage": "", "late_care_level": ""},
+        ),
     )
 
 
@@ -71,12 +96,22 @@ def students_create(
     name: str = Form(...),
     grade: str = Form(""),
     current_stage: str = Form(""),
+    late_care_level: str = Form(""),
     session: Session = Depends(get_db),
 ):
-    form = {"name": name, "grade": grade, "current_stage": current_stage}
+    form = {
+        "name": name,
+        "grade": grade,
+        "current_stage": current_stage,
+        "late_care_level": late_care_level,
+    }
     try:
         student = repository.create_student(
-            session, name=name, grade=grade, current_stage=current_stage
+            session,
+            name=name,
+            grade=grade,
+            current_stage=current_stage,
+            late_care_level=late_care_level,
         )
     except ValueError as exc:
         return templates.TemplateResponse(
@@ -102,7 +137,7 @@ def students_edit(
             _students_context(
                 request,
                 session,
-                {"name": "", "grade": "", "current_stage": ""},
+                {"name": "", "grade": "", "current_stage": "", "late_care_level": ""},
                 errors=["学生不存在"],
             ),
             status_code=404,
@@ -111,6 +146,7 @@ def students_edit(
         "name": student.name,
         "grade": student.grade or "",
         "current_stage": student.current_stage or "",
+        "late_care_level": student.late_care_level or "",
     }
     return templates.TemplateResponse(
         request,
@@ -126,12 +162,23 @@ def students_update(
     name: str = Form(...),
     grade: str = Form(""),
     current_stage: str = Form(""),
+    late_care_level: str = Form(""),
     session: Session = Depends(get_db),
 ):
-    form = {"name": name, "grade": grade, "current_stage": current_stage}
+    form = {
+        "name": name,
+        "grade": grade,
+        "current_stage": current_stage,
+        "late_care_level": late_care_level,
+    }
     try:
         repository.update_student(
-            session, student_id, name=name, grade=grade, current_stage=current_stage
+            session,
+            student_id,
+            name=name,
+            grade=grade,
+            current_stage=current_stage,
+            late_care_level=late_care_level,
         )
     except ValueError as exc:
         return templates.TemplateResponse(
@@ -318,11 +365,12 @@ def teachers_create(
     request: Request,
     name: str = Form(...),
     role: str = Form(""),
+    password: str = Form(""),
     session: Session = Depends(get_db),
 ):
     form = {"name": name, "role": role}
     try:
-        teacher = repository.create_teacher(session, name=name, role=role)
+        teacher = repository.create_teacher(session, name=name, role=role, password=password)
     except ValueError as exc:
         return templates.TemplateResponse(
             request,
@@ -361,11 +409,12 @@ def teachers_update(
     teacher_id: str,
     name: str = Form(...),
     role: str = Form(""),
+    password: str = Form(""),
     session: Session = Depends(get_db),
 ):
     form = {"name": name, "role": role}
     try:
-        repository.update_teacher(session, teacher_id, name=name, role=role)
+        repository.update_teacher(session, teacher_id, name=name, role=role, password=password)
     except ValueError as exc:
         return templates.TemplateResponse(
             request,

@@ -11,6 +11,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.catalog import repository as catalog_repository
+from app.catalog.models import Teacher
+from app.core.auth import is_admin, require_login
 from app.core.database import get_db
 from app.feedback import service
 from app.feedback.forms import DailyFeedbackInput, SpecialFeedbackInput
@@ -63,33 +65,54 @@ def _parse_filters(request: Request) -> service.HistoryFilters:
     )
 
 
+def _scope_teacher_id(teacher: Teacher) -> str | None:
+    return None if is_admin(teacher) else teacher.teacher_id
+
+
+def _scoped_choices(db: Session, teacher: Teacher):
+    if is_admin(teacher):
+        return catalog_repository.list_classes(db), catalog_repository.list_students(db)
+    return (
+        catalog_repository.list_classes_for_teacher(db, teacher.teacher_id),
+        catalog_repository.list_students_for_teacher(db, teacher.teacher_id),
+    )
+
+
 def _index_context(
     request: Request,
     db: Session,
+    teacher: Teacher,
     filters: service.HistoryFilters | None = None,
     errors: list[str] | None = None,
 ) -> dict:
     if filters is None:
         filters = _parse_filters(request)
+    filters.teacher_id = _scope_teacher_id(teacher)
     params = {
         key: value
         for key in ("date_from", "date_to", "session_type", "class_id", "student_id", "status")
         if (value := getattr(filters, key))
     }
     query_string = ("?" + urlencode(params)) if params else ""
+    classes, students = _scoped_choices(db, teacher)
     return {
         "rows": service.query_history(db, filters),
         "filters": filters,
-        "classes": catalog_repository.list_classes(db),
-        "students": catalog_repository.list_students(db),
+        "classes": classes,
+        "students": students,
         "RATING_LABELS": RATING_LABELS,
         "export_url": "/export.xlsx" + query_string,
         "errors": errors or [],
     }
 
 
-def _find_row(db: Session, feedback_type: str, feedback_id: str) -> service.HistoryRow | None:
-    for row in service.query_history(db, service.HistoryFilters(status="all")):
+def _find_row(
+    db: Session, teacher: Teacher, feedback_type: str, feedback_id: str
+) -> service.HistoryRow | None:
+    filters = service.HistoryFilters(
+        status="all", teacher_id=_scope_teacher_id(teacher)
+    )
+    for row in service.query_history(db, filters):
         if row.feedback_type == feedback_type and row.feedback_id == feedback_id:
             return row
     return None
@@ -98,13 +121,14 @@ def _find_row(db: Session, feedback_type: str, feedback_id: str) -> service.Hist
 def _detail_context(
     request: Request,
     db: Session,
+    teacher: Teacher,
     feedback_type: str,
     feedback_id: str,
     form: dict | None = None,
     selected_ids: set[str] | None = None,
     errors: list[str] | None = None,
 ) -> dict | None:
-    row = _find_row(db, feedback_type, feedback_id)
+    row = _find_row(db, teacher, feedback_type, feedback_id)
     if row is None:
         return None
     fields = RATING_FIELDS.get(feedback_type)
@@ -132,9 +156,13 @@ def _detail_context(
 
 
 @router.get("/history", response_class=HTMLResponse)
-def history_index(request: Request, db: Session = Depends(get_db)):
+def history_index(
+    request: Request,
+    teacher: Teacher = Depends(require_login),
+    db: Session = Depends(get_db),
+):
     return templates.TemplateResponse(
-        request, "history/index.html", _index_context(request, db)
+        request, "history/index.html", _index_context(request, db, teacher)
     )
 
 
@@ -143,14 +171,15 @@ def history_detail(
     request: Request,
     feedback_type: str,
     feedback_id: str,
+    teacher: Teacher = Depends(require_login),
     db: Session = Depends(get_db),
 ):
-    context = _detail_context(request, db, feedback_type, feedback_id)
+    context = _detail_context(request, db, teacher, feedback_type, feedback_id)
     if context is None:
         return templates.TemplateResponse(
             request,
             "history/index.html",
-            _index_context(request, db, errors=["反馈记录不存在"]),
+            _index_context(request, db, teacher, errors=["反馈记录不存在"]),
             status_code=404,
         )
     return templates.TemplateResponse(request, "history/detail.html", context)
@@ -168,6 +197,7 @@ def history_update(
     progress_indicators: list[str] = Form(default=[]),
     weak_indicators: list[str] = Form(default=[]),
     note: str = Form(""),
+    teacher: Teacher = Depends(require_login),
     db: Session = Depends(get_db),
 ):
     fields = RATING_FIELDS.get(feedback_type)
@@ -188,7 +218,7 @@ def history_update(
             request,
             "history/detail.html",
             _detail_context(
-                request, db, feedback_type, feedback_id,
+                request, db, teacher, feedback_type, feedback_id,
                 form=form, selected_ids=selected_ids, errors=[message],
             ),
             status_code=422,
@@ -229,10 +259,13 @@ def history_update(
 def history_void(
     feedback_type: str,
     feedback_id: str,
+    teacher: Teacher = Depends(require_login),
     db: Session = Depends(get_db),
 ):
-    try:
-        service.void_feedback(db, feedback_type, feedback_id)
-    except ValueError:
-        pass
+    row = _find_row(db, teacher, feedback_type, feedback_id)
+    if row is not None:
+        try:
+            service.void_feedback(db, feedback_type, feedback_id)
+        except ValueError:
+            pass
     return RedirectResponse("/history", status_code=303)

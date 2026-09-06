@@ -1,4 +1,4 @@
-"""Today page and session creation."""
+"""Today page and session creation, scoped to the logged-in teacher."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.catalog import repository as catalog_repository
+from app.catalog.models import Teacher
+from app.core.auth import is_admin, require_login
 from app.core.database import get_db
 from app.sessions import repository
 
@@ -20,35 +22,67 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 router = APIRouter(tags=["sessions"])
 
 
+def _scoped_choices(db: Session, teacher: Teacher):
+    if is_admin(teacher):
+        return (
+            catalog_repository.list_classes(db, active_only=True),
+            catalog_repository.list_teachers(db, active_only=True),
+        )
+    return (
+        catalog_repository.list_classes_for_teacher(db, teacher.teacher_id),
+        [teacher],
+    )
+
+
+def _today_context(
+    request: Request,
+    db: Session,
+    on_date: date,
+    teacher: Teacher,
+    form: dict,
+    errors: list[str],
+) -> dict:
+    classes, teachers = _scoped_choices(db, teacher)
+    teacher_id = None if is_admin(teacher) else teacher.teacher_id
+    return {
+        "on_date": on_date.isoformat(),
+        "sessions": repository.list_sessions_for_date(db, on_date, teacher_id=teacher_id),
+        "classes": classes,
+        "teachers": teachers,
+        "form": form,
+        "errors": errors,
+    }
+
+
+def _empty_form() -> dict:
+    return {
+        "session_type": "daily",
+        "class_id": "",
+        "teacher_id": "",
+        "course_name": "",
+        "start_time": datetime.now().strftime("%H:%M"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Today page (GET /)
 # ---------------------------------------------------------------------------
 @router.get("/", response_class=HTMLResponse)
-def today_page(request: Request, session: Session = Depends(get_db)):
+def today_page(
+    request: Request,
+    teacher: Teacher = Depends(require_login),
+    db: Session = Depends(get_db),
+):
     selected = request.query_params.get("date", "")
     try:
         on_date = date.fromisoformat(selected)
     except ValueError:
         on_date = date.today()
 
-    sessions = repository.list_sessions_for_date(session, on_date)
     return templates.TemplateResponse(
         request,
         "today.html",
-        {
-            "on_date": on_date.isoformat(),
-            "sessions": sessions,
-            "classes": catalog_repository.list_classes(session, active_only=True),
-            "teachers": catalog_repository.list_teachers(session, active_only=True),
-            "form": {
-                "session_type": "daily",
-                "class_id": "",
-                "teacher_id": "",
-                "course_name": "",
-                "start_time": datetime.now().strftime("%H:%M"),
-            },
-            "errors": [],
-        },
+        _today_context(request, db, on_date, teacher, _empty_form(), []),
     )
 
 
@@ -64,7 +98,8 @@ def sessions_create(
     session_date: str = Form(...),
     start_time: str = Form(...),
     course_name: str = Form(""),
-    session: Session = Depends(get_db),
+    teacher: Teacher = Depends(require_login),
+    db: Session = Depends(get_db),
 ):
     form = {
         "session_type": session_type,
@@ -75,19 +110,22 @@ def sessions_create(
     }
 
     def _error(exc: ValueError):
+        try:
+            on_date = date.fromisoformat(session_date)
+        except ValueError:
+            on_date = date.today()
         return templates.TemplateResponse(
             request,
             "today.html",
-            {
-                "on_date": session_date,
-                "sessions": [],
-                "classes": catalog_repository.list_classes(session, active_only=True),
-                "teachers": catalog_repository.list_teachers(session, active_only=True),
-                "form": form,
-                "errors": [str(exc)],
-            },
+            _today_context(request, db, on_date, teacher, form, [str(exc)]),
             status_code=422,
         )
+
+    if not is_admin(teacher):
+        teacher_id = teacher.teacher_id
+        allowed = {c.class_id for c in catalog_repository.list_classes_for_teacher(db, teacher.teacher_id)}
+        if class_id not in allowed:
+            return _error(ValueError("只能为自己负责的班级创建场次"))
 
     try:
         parsed_date = date.fromisoformat(session_date)
@@ -97,7 +135,7 @@ def sessions_create(
 
     try:
         created = repository.create_session(
-            session,
+            db,
             class_id=class_id,
             teacher_id=teacher_id,
             session_type=session_type,

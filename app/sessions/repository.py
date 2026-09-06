@@ -91,13 +91,16 @@ def _completed_count(db: Session, session: ClassSession) -> int:
     ) or 0
 
 
-def list_sessions_for_date(db: Session, session_date: date) -> list[ClassSessionSummary]:
+def list_sessions_for_date(
+    db: Session, session_date: date, teacher_id: str | None = None
+) -> list[ClassSessionSummary]:
     date_str = session_date.isoformat()
-    sessions = db.scalars(
-        select(ClassSession)
-        .where(ClassSession.session_date == date_str, ClassSession.status == "active")
-        .order_by(ClassSession.start_time)
-    ).all()
+    stmt = select(ClassSession).where(
+        ClassSession.session_date == date_str, ClassSession.status == "active"
+    )
+    if teacher_id:
+        stmt = stmt.where(ClassSession.teacher_id == teacher_id)
+    sessions = db.scalars(stmt.order_by(ClassSession.start_time)).all()
 
     summaries: list[ClassSessionSummary] = []
     for session in sessions:

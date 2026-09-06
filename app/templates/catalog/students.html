@@ -8,7 +8,24 @@
   <form method="post" action="{{ action_url }}">
     <input type="text" name="name" placeholder="姓名" value="{{ form.name }}" required>
     <input type="text" name="grade" placeholder="年级" value="{{ form.grade }}">
-    <input type="text" name="current_stage" placeholder="当前阶段" value="{{ form.current_stage }}">
+    <select name="current_stage" aria-label="当前阶段">
+      <option value="">暂未确定阶段</option>
+      {% if legacy_stage %}
+      <option value="{{ legacy_stage }}" selected>{{ legacy_stage }}（历史值，待修正）</option>
+      {% endif %}
+      {% for stage in stages %}
+      <option value="{{ stage.stage_id }}" {% if form.current_stage == stage.stage_id %}selected{% endif %}>{{ stage.stage_id }}｜{{ stage.name }}</option>
+      {% endfor %}
+    </select>
+    <select name="late_care_level" aria-label="晚辅档位">
+      <option value="">暂未确定档位</option>
+      {% if legacy_late_care_level %}
+      <option value="{{ legacy_late_care_level }}" selected>{{ legacy_late_care_level }}（历史值，待修正）</option>
+      {% endif %}
+      {% for level in late_care_levels %}
+      <option value="{{ level.level_id }}" {% if form.late_care_level == level.level_id %}selected{% endif %}>{{ level.level_id }}</option>
+      {% endfor %}
+    </select>
     <button type="submit">{% if editing %}保存{% else %}新增{% endif %}</button>
     {% if editing %}<a href="/catalog/students">取消</a>{% endif %}
   </form>
@@ -16,7 +33,7 @@
 
 <table>
   <thead>
-    <tr><th>姓名</th><th>年级</th><th>当前阶段</th><th>状态</th><th>操作</th></tr>
+    <tr><th>姓名</th><th>年级</th><th>当前阶段</th><th>晚辅档位</th><th>状态</th><th>操作</th></tr>
   </thead>
   <tbody>
   {% for s in students %}
@@ -24,16 +41,17 @@
       <td>{{ s.name }}</td>
       <td>{{ s.grade or '' }}</td>
       <td>{{ s.current_stage or '' }}</td>
+      <td>{{ s.late_care_level or '' }}</td>
       <td>{{ s.status }}</td>
       <td>
         <a href="/catalog/students/{{ s.student_id }}/edit">编辑</a>
         <form class="inline" method="post" action="/catalog/students/{{ s.student_id }}/deactivate">
-          <button type="submit">停用</button>
+          <button type="submit" class="danger">停用</button>
         </form>
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="5">暂无学生</td></tr>
+    <tr><td colspan="6">暂无学生</td></tr>
   {% endfor %}
   </tbody>
 </table>

@@ -203,6 +203,7 @@ class HistoryFilters:
     class_id: str | None = None
     student_id: str | None = None
     status: str | None = None
+    teacher_id: str | None = None
 
 
 @dataclass
@@ -249,6 +250,8 @@ def _indicator_texts(db: Session, indicator_ids: list[str]) -> list[str]:
 
 
 def _apply_history_filters(stmt, model, filters: HistoryFilters):
+    if filters.teacher_id:
+        stmt = stmt.where(ClassSession.teacher_id == filters.teacher_id)
     if filters.session_type:
         stmt = stmt.where(ClassSession.session_type == filters.session_type)
     if filters.class_id:

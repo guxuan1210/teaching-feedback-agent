@@ -14,8 +14,16 @@ from datetime import date, datetime, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.catalog.models import Class, Enrollment, Student, Teacher
+from app.catalog.models import (
+    Class,
+    Enrollment,
+    LateCareLevelDict,
+    StageDict,
+    Student,
+    Teacher,
+)
 from app.core.ids import new_id
+from app.core.security import hash_password
 
 CLASS_TYPES = {"daily", "special"}
 STATUS_VALUES = {"active", "inactive"}
@@ -44,6 +52,44 @@ def _optional(value: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 # Students
 # ---------------------------------------------------------------------------
+def list_active_stages(session: Session) -> list[StageDict]:
+    stmt = (
+        select(StageDict)
+        .where(StageDict.active == 1)
+        .order_by(StageDict.sort_order, StageDict.stage_id)
+    )
+    return list(session.scalars(stmt))
+
+
+def list_active_late_care_levels(session: Session) -> list[LateCareLevelDict]:
+    stmt = (
+        select(LateCareLevelDict)
+        .where(LateCareLevelDict.active == 1)
+        .order_by(LateCareLevelDict.sort_order, LateCareLevelDict.level_id)
+    )
+    return list(session.scalars(stmt))
+
+
+def _validated_stage(session: Session, value: str | None) -> str | None:
+    value = _optional(value)
+    if value is None:
+        return None
+    row = session.get(StageDict, value)
+    if row is None or row.active != 1:
+        raise ValueError(f"九阶阶段无效：{value}")
+    return value
+
+
+def _validated_late_care_level(session: Session, value: str | None) -> str | None:
+    value = _optional(value)
+    if value is None:
+        return None
+    row = session.get(LateCareLevelDict, value)
+    if row is None or row.active != 1:
+        raise ValueError(f"晚辅档位无效：{value}")
+    return value
+
+
 def list_students(session: Session, active_only: bool = False) -> list[Student]:
     stmt = select(Student).order_by(Student.created_at)
     if active_only:
@@ -56,12 +102,14 @@ def create_student(
     name: str,
     grade: str | None = None,
     current_stage: str | None = None,
+    late_care_level: str | None = None,
 ) -> Student:
     student = Student(
         student_id=new_id("S"),
         name=_clean_name(name),
         grade=_optional(grade),
-        current_stage=_optional(current_stage),
+        current_stage=_validated_stage(session, current_stage),
+        late_care_level=_validated_late_care_level(session, late_care_level),
         status="active",
     )
     session.add(student)
@@ -75,6 +123,7 @@ def update_student(
     name: str | None = None,
     grade: str | None = _UNSET,
     current_stage: str | None = _UNSET,
+    late_care_level: str | None = _UNSET,
 ) -> Student:
     student = session.get(Student, student_id)
     if student is None:
@@ -84,7 +133,9 @@ def update_student(
     if grade is not _UNSET:
         student.grade = _optional(grade)
     if current_stage is not _UNSET:
-        student.current_stage = _optional(current_stage)
+        student.current_stage = _validated_stage(session, current_stage)
+    if late_care_level is not _UNSET:
+        student.late_care_level = _validated_late_care_level(session, late_care_level)
     student.updated_at = _utcnow()
     session.commit()
     return student
@@ -183,11 +234,13 @@ def create_teacher(
     session: Session,
     name: str,
     role: str | None = None,
+    password: str | None = None,
 ) -> Teacher:
     teacher = Teacher(
         teacher_id=new_id("T"),
         name=_clean_name(name),
         role=_optional(role),
+        password_hash=hash_password(password) if password else None,
         status="active",
     )
     session.add(teacher)
@@ -200,6 +253,7 @@ def update_teacher(
     teacher_id: str,
     name: str | None = None,
     role: str | None = _UNSET,
+    password: str | None = None,
 ) -> Teacher:
     teacher = session.get(Teacher, teacher_id)
     if teacher is None:
@@ -208,6 +262,8 @@ def update_teacher(
         teacher.name = _clean_name(name)
     if role is not _UNSET:
         teacher.role = _optional(role)
+    if password:
+        teacher.password_hash = hash_password(password)
     teacher.updated_at = _utcnow()
     session.commit()
     return teacher
@@ -306,3 +362,26 @@ def list_enrollments(session: Session, class_id: str | None = None) -> list[Enro
     if class_id:
         stmt = stmt.where(Enrollment.class_id == class_id)
     return list(session.scalars(stmt))
+
+
+# ---------------------------------------------------------------------------
+# Teacher-scoped lookups (a teacher owns the classes they head)
+# ---------------------------------------------------------------------------
+def list_classes_for_teacher(session: Session, teacher_id: str) -> list[Class]:
+    stmt = (
+        select(Class)
+        .where(Class.head_teacher_id == teacher_id, Class.status == "active")
+        .order_by(Class.created_at)
+    )
+    return list(session.scalars(stmt))
+
+
+def list_students_for_teacher(session: Session, teacher_id: str) -> list[Student]:
+    stmt = (
+        select(Student)
+        .join(Enrollment, Enrollment.student_id == Student.student_id)
+        .join(Class, Class.class_id == Enrollment.class_id)
+        .where(Class.head_teacher_id == teacher_id)
+        .order_by(Student.name)
+    )
+    return list(session.scalars(stmt).unique())

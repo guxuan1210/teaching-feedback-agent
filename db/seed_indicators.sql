@@ -163,7 +163,6 @@ INSERT OR IGNORE INTO indicator (indicator_id, category, text, sort_order, activ
 ('SHS003','special_home_school','引导孩子复盘本节课内容，主动表达收获',3,1);
 
 -- =====================================================================
--- 备注：Demo 精简数据模型（见 db/schema.sql）不再包含 stage_dict、
--- assessment、monthly_summary 等表；晚辅档位、入学测评维度等
--- 字段留待正式版补充。本文件只维护 indicator 指标字典（85 条）。
+-- 备注：本文件只维护 indicator 指标字典（85 条）。九阶阶段、晚辅档位、
+-- 入学测评模块/维度/评分锚点由 db/seed_reference_data.sql 独立维护。
 -- =====================================================================

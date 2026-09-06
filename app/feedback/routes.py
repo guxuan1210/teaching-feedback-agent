@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.catalog.models import Teacher
+from app.core.auth import is_admin, require_login
 from app.core.database import get_db
 from app.feedback import service
 from app.feedback.forms import DailyFeedbackInput, SpecialFeedbackInput
@@ -129,8 +131,20 @@ def _workspace_context(
     }
 
 
+def _can_access(teacher: Teacher, session: ClassSession) -> bool:
+    return is_admin(teacher) or session.teacher_id == teacher.teacher_id
+
+
 @router.get("/sessions/{session_id}", response_class=HTMLResponse)
-def workspace_page(request: Request, session_id: str, db: Session = Depends(get_db)):
+def workspace_page(
+    request: Request,
+    session_id: str,
+    teacher: Teacher = Depends(require_login),
+    db: Session = Depends(get_db),
+):
+    cls = db.get(ClassSession, session_id)
+    if cls is not None and not _can_access(teacher, cls):
+        raise HTTPException(status_code=403, detail="无权限访问该场次")
     try:
         context = _workspace_context(request, db, session_id)
     except ValueError as exc:
@@ -152,6 +166,7 @@ def workspace_page(request: Request, session_id: str, db: Session = Depends(get_
 def _save(
     request: Request,
     db: Session,
+    teacher: Teacher,
     session_id: str,
     student_id: str,
     is_daily: bool,
@@ -160,6 +175,9 @@ def _save(
     weak: list[str],
     note: str,
 ):
+    cls = db.get(ClassSession, session_id)
+    if cls is None or not _can_access(teacher, cls):
+        raise HTTPException(status_code=403, detail="无权限访问该场次")
     fields = _rating_fields(is_daily)
     try:
         ratings = {field: int(form[field]) for field in fields}
@@ -243,6 +261,7 @@ def save_daily(
     progress_indicators: list[str] = Form(default=[]),
     weak_indicators: list[str] = Form(default=[]),
     note: str = Form(""),
+    teacher: Teacher = Depends(require_login),
     db: Session = Depends(get_db),
 ):
     form = {
@@ -252,7 +271,7 @@ def save_daily(
         "note": note,
     }
     return _save(
-        request, db, session_id, student_id, True, form,
+        request, db, teacher, session_id, student_id, True, form,
         progress_indicators, weak_indicators, note,
     )
 
@@ -267,6 +286,7 @@ def save_special(
     progress_indicators: list[str] = Form(default=[]),
     weak_indicators: list[str] = Form(default=[]),
     note: str = Form(""),
+    teacher: Teacher = Depends(require_login),
     db: Session = Depends(get_db),
 ):
     form = {
@@ -275,6 +295,6 @@ def save_special(
         "note": note,
     }
     return _save(
-        request, db, session_id, student_id, False, form,
+        request, db, teacher, session_id, student_id, False, form,
         progress_indicators, weak_indicators, note,
     )

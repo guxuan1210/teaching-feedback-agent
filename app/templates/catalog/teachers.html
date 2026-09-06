@@ -8,6 +8,7 @@
   <form method="post" action="{{ action_url }}">
     <input type="text" name="name" placeholder="姓名" value="{{ form.name }}" required>
     <input type="text" name="role" placeholder="角色" value="{{ form.role }}">
+    <input type="password" name="password" placeholder="{% if editing %}新密码（留空不修改）{% else %}登录密码{% endif %}" autocomplete="new-password">
     <button type="submit">{% if editing %}保存{% else %}新增{% endif %}</button>
     {% if editing %}<a href="/catalog/teachers">取消</a>{% endif %}
   </form>
@@ -26,7 +27,7 @@
       <td>
         <a href="/catalog/teachers/{{ t.teacher_id }}/edit">编辑</a>
         <form class="inline" method="post" action="/catalog/teachers/{{ t.teacher_id }}/deactivate">
-          <button type="submit">停用</button>
+          <button type="submit" class="danger">停用</button>
         </form>
       </td>
     </tr>
