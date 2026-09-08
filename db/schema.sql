@@ -1,7 +1,7 @@
 -- =====================================================================
 -- 教学反馈数据采集 Demo · 数据库 Schema（SQLite）
 -- 本文件是可执行 SQLAlchemy 模型（app/*/models.py）的忠实镜像，
--- 共 15 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
+-- 共 17 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
 -- =====================================================================
 
 PRAGMA foreign_keys = ON;
@@ -204,4 +204,41 @@ CREATE TABLE IF NOT EXISTS special_feedback_indicator (
     feedback_id  TEXT NOT NULL REFERENCES special_feedback(feedback_id) ON DELETE CASCADE,
     indicator_id TEXT NOT NULL REFERENCES indicator(indicator_id) ON DELETE CASCADE,
     PRIMARY KEY (feedback_id, indicator_id)
+);
+
+-- ---------------------------------------------------------------------
+-- 14. 周报 WeeklyReport
+--     派生的学生成长记录，固定其来源反馈；生成模式可替换、老师审核定稿。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS weekly_report (
+    report_id       TEXT PRIMARY KEY,
+    student_id      TEXT NOT NULL REFERENCES student(student_id),
+    class_id        TEXT NOT NULL REFERENCES class(class_id),
+    teacher_id      TEXT NOT NULL REFERENCES teacher(teacher_id),
+    period_start    TEXT NOT NULL,
+    period_end      TEXT NOT NULL,
+    generation_mode TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'draft',
+    summary         TEXT NOT NULL,
+    strengths       TEXT NOT NULL,
+    concerns        TEXT NOT NULL,
+    suggestions     TEXT NOT NULL,
+    generation_note TEXT,
+    finalized_at    TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK (period_end >= period_start),
+    CHECK (generation_mode IN ('template', 'ai')),
+    CHECK (status IN ('draft', 'finalized'))
+);
+
+-- ---------------------------------------------------------------------
+-- 15. 周报 ↔ 来源反馈 多对多（feedback_id 复用 daily/special 的 id）
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS weekly_report_source (
+    report_id     TEXT NOT NULL REFERENCES weekly_report(report_id) ON DELETE CASCADE,
+    feedback_type TEXT NOT NULL,
+    feedback_id   TEXT NOT NULL,
+    PRIMARY KEY (report_id, feedback_type, feedback_id),
+    CHECK (feedback_type IN ('daily', 'special'))
 );

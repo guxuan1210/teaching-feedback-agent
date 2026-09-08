@@ -11,7 +11,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class Base(DeclarativeBase):
@@ -59,6 +59,7 @@ def _import_all_models() -> None:
     from app.catalog import models as catalog_models  # noqa: F401
     from app.sessions import models as session_models  # noqa: F401
     from app.feedback import models as feedback_models  # noqa: F401
+    from app.reports import models as report_models  # noqa: F401
 
 
 def _add_missing_columns(engine: Engine) -> None:

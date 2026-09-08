@@ -27,11 +27,16 @@ def test_schema_sql_mirrors_current_model_fields():
     schema = Path("db/schema.sql").read_text(encoding="utf-8")
     assert "password_hash" in schema
     assert "late_care_level TEXT" in schema
+    assert "generation_note" in schema
+    assert "finalized_at" in schema
+    assert "共 17 张表" in schema
     for table in (
         "stage_dict",
         "late_care_level_dict",
         "assessment_module",
         "assessment_dimension",
         "assessment_score_anchor",
+        "weekly_report",
+        "weekly_report_source",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in schema
