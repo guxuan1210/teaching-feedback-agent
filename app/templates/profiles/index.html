@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}学生档案{% endblock %}
+{% block content %}
+<h1>学生档案</h1>
+
+<form method="get" id="profile-filter" class="create-form">
+  <label>班级
+    <select name="class_id">
+      <option value="">请选择班级</option>
+      {% for c in classes %}
+        <option value="{{ c.class_id }}">{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>学生
+    <select name="student_id">
+      <option value="">请选择学生</option>
+      {% for s in students %}
+        <option value="{{ s.student_id }}">{{ s.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>开始日期 <input type="date" name="date_from" value="{{ date_from }}"></label>
+  <label>结束日期 <input type="date" name="date_to" value="{{ date_to }}"></label>
+  <button type="submit">查看档案</button>
+</form>
+
+{% if students %}
+<h2>学生列表</h2>
+<table>
+  <thead><tr><th>学号</th><th>姓名</th><th>操作</th></tr></thead>
+  <tbody>
+    {% for s, class_id in student_links %}
+      <tr>
+        <td>{{ s.student_id }}</td>
+        <td>{{ s.name }}</td>
+        <td><a href="/profiles/{{ s.student_id }}{% if class_id %}?class_id={{ class_id }}{% endif %}">查看档案</a></td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">暂无可见学生。</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById("profile-filter").addEventListener("submit", function (e) {
+    var studentId = this.elements["student_id"].value;
+    if (!studentId) {
+      e.preventDefault();
+      return;
+    }
+    this.action = "/profiles/" + encodeURIComponent(studentId);
+  });
+</script>
+{% endblock %}

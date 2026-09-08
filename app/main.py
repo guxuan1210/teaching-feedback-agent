@@ -9,6 +9,7 @@ from app.catalog.routes import router as catalog_router
 from app.export.routes import router as export_router
 from app.feedback.routes import router as feedback_router
 from app.history.routes import router as history_router
+from app.profiles.routes import router as profiles_router
 from app.sessions.routes import router as sessions_router
 from app.core.database import (
     build_engine,
@@ -51,6 +52,7 @@ def create_app(
     application.include_router(sessions_router)
     application.include_router(feedback_router)
     application.include_router(history_router)
+    application.include_router(profiles_router)
     application.include_router(export_router)
 
     static_dir = Path(__file__).resolve().parent / "static"

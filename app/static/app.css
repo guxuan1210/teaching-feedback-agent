@@ -369,6 +369,37 @@ legend {
 
 .muted { color: var(--ink-muted); }
 
+/* ---------- 学生档案：趋势条形指示 ---------- */
+.trend-table td:last-child { min-width: 170px; white-space: nowrap; }
+
+.trend-bar {
+  display: inline-block;
+  vertical-align: middle;
+  width: 90px;
+  height: 10px;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.trend-bar span {
+  display: block;
+  height: 100%;
+  background: var(--ink-muted);
+}
+.trend-bar.up span { background: var(--good); }
+.trend-bar.down span { background: var(--accent); }
+.trend-bar.flat span { background: var(--ink-muted); }
+
+.trend-change {
+  display: inline-block;
+  margin-left: 0.5rem;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.trend-change.up { color: var(--good); }
+.trend-change.down { color: var(--accent); }
+.trend-change.flat { color: var(--ink-muted); }
+
 /* ---------- 响应式 ---------- */
 @media (max-width: 800px) {
   body { padding: 0 1rem 3rem; }

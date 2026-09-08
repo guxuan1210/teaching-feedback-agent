@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}学生档案详情{% endblock %}
+{% block content %}
+<h1>学生档案</h1>
+
+<form method="get" id="profile-filter" class="create-form">
+  <label>班级
+    <select name="class_id">
+      <option value="">请选择班级</option>
+      {% for c in classes %}
+        <option value="{{ c.class_id }}" {% if class_id == c.class_id %}selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>学生
+    <select name="student_id">
+      <option value="">请选择学生</option>
+      {% for s in students %}
+        <option value="{{ s.student_id }}" {% if student_id == s.student_id %}selected{% endif %}>{{ s.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>开始日期 <input type="date" name="date_from" value="{{ date_from }}"></label>
+  <label>结束日期 <input type="date" name="date_to" value="{{ date_to }}"></label>
+  <button type="submit">查看档案</button>
+</form>
+
+{% if errors %}
+  <div class="flash error">
+    {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+  </div>
+{% endif %}
+
+{% if profile %}
+<h2>基础信息</h2>
+<table>
+  <tbody>
+    <tr><th>姓名</th><td>{{ profile.student.name }}</td></tr>
+    <tr><th>年级</th><td>{{ profile.student.grade or '—' }}</td></tr>
+    <tr><th>九阶阶段</th><td>{{ profile.student.current_stage or '—' }}</td></tr>
+    <tr><th>晚辅档位</th><td>{{ profile.student.late_care_level or '—' }}</td></tr>
+    <tr><th>班级</th><td>{{ profile.klass.name }}</td></tr>
+    <tr><th>反馈数量</th><td>{{ profile.feedback_count }}</td></tr>
+  </tbody>
+</table>
+
+<h2>晚辅评分趋势</h2>
+{% if profile.daily_trends %}
+<table class="trend-table">
+  <thead><tr><th>维度</th><th>起始</th><th>结束</th><th>变化</th></tr></thead>
+  <tbody>
+    {% for key, trend in profile.daily_trends.items() %}
+      <tr>
+        <td>{{ DAILY_TREND_LABELS[key] }}</td>
+        <td>{{ trend.start }}</td>
+        <td>{{ trend.end }}</td>
+        <td>
+          <div class="trend-bar {{ 'up' if trend.change > 0 else ('down' if trend.change < 0 else 'flat') }}">
+            <span style="width: {{ [((trend.change if trend.change >= 0 else -trend.change) * 25), 100] | min }}%"></span>
+          </div>
+          <span class="trend-change {{ 'up' if trend.change > 0 else ('down' if trend.change < 0 else 'flat') }}">
+            {{ '+' if trend.change > 0 }}{{ trend.change }}
+          </span>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">该周期内暂无晚辅评分记录。</p>
+{% endif %}
+
+<h2>专项评分趋势</h2>
+{% if profile.special_trends %}
+<table class="trend-table">
+  <thead><tr><th>维度</th><th>起始</th><th>结束</th><th>变化</th></tr></thead>
+  <tbody>
+    {% for key, trend in profile.special_trends.items() %}
+      <tr>
+        <td>{{ SPECIAL_TREND_LABELS[key] }}</td>
+        <td>{{ trend.start }}</td>
+        <td>{{ trend.end }}</td>
+        <td>
+          <div class="trend-bar {{ 'up' if trend.change > 0 else ('down' if trend.change < 0 else 'flat') }}">
+            <span style="width: {{ [((trend.change if trend.change >= 0 else -trend.change) * 25), 100] | min }}%"></span>
+          </div>
+          <span class="trend-change {{ 'up' if trend.change > 0 else ('down' if trend.change < 0 else 'flat') }}">
+            {{ '+' if trend.change > 0 }}{{ trend.change }}
+          </span>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">该周期内暂无专项评分记录。</p>
+{% endif %}
+
+<h2>高频进步项</h2>
+{% if profile.strengths %}
+<table>
+  <thead><tr><th>指标</th><th>出现次数</th></tr></thead>
+  <tbody>
+    {% for item in profile.strengths %}
+      <tr><td>{{ item.text }}</td><td>{{ item.count }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">暂无进步项记录。</p>
+{% endif %}
+
+<h2>高频薄弱项</h2>
+{% if profile.concerns %}
+<table>
+  <thead><tr><th>指标</th><th>出现次数</th></tr></thead>
+  <tbody>
+    {% for item in profile.concerns %}
+      <tr><td>{{ item.text }}</td><td>{{ item.count }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">暂无薄弱项记录。</p>
+{% endif %}
+
+<h2>近期备注</h2>
+{% if profile.recent_notes %}
+<ul>
+  {% for note in profile.recent_notes %}
+    <li>{{ note }}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">暂无备注。</p>
+{% endif %}
+
+<h2>来源反馈</h2>
+{% if profile.sources %}
+<table>
+  <thead><tr><th>日期</th><th>类型</th><th>备注</th><th>操作</th></tr></thead>
+  <tbody>
+    {% for source in profile.sources %}
+      <tr>
+        <td>{{ source.session_date }}</td>
+        <td>{{ '晚辅' if source.feedback_type == 'daily' else '专项' }}</td>
+        <td>{{ source.note or '—' }}</td>
+        <td><a href="/history/{{ source.feedback_type }}/{{ source.feedback_id }}">查看反馈</a></td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">暂无来源反馈。</p>
+{% endif %}
+
+{% else %}
+<p class="muted">请选择班级、学生与日期后查看档案。</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById("profile-filter").addEventListener("submit", function (e) {
+    var studentId = this.elements["student_id"].value;
+    if (!studentId) {
+      e.preventDefault();
+      return;
+    }
+    this.action = "/profiles/" + encodeURIComponent(studentId);
+  });
+</script>
+{% endblock %}

@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.catalog.models import Class, Enrollment, Student, Teacher
 from app.core.database import build_engine, build_session_factory, initialize_database
+from app.core.security import hash_password
 from app.feedback.models import (
     DailyFeedback,
     DailyFeedbackIndicator,
@@ -50,6 +51,47 @@ def client(database_url: str):
     application = create_app(database_url=database_url)
     with TestClient(application) as test_client:
         test_client.post("/login", data={"name": "管理员", "password": "admin123"})
+        yield test_client
+
+
+@pytest.fixture()
+def teacher_client(database_url: str):
+    """A logged-in non-admin teacher who owns exactly one class ``C-OWNED``
+    with one enrolled student ``S-OWNED`` (name "普通学生")."""
+    application = create_app(database_url=database_url)
+    factory = application.state.session_factory
+    with factory() as session:
+        session.add(
+            Teacher(
+                teacher_id="T-OTHER", name="普通老师", role="晚辅教师",
+                password_hash=hash_password("pass123"), status="active",
+            )
+        )
+        session.commit()
+        session.add(
+            Class(
+                class_id="C-OWNED", name="普通晚辅班", grade="三年级",
+                class_type="daily", head_teacher_id="T-OTHER", status="active",
+            )
+        )
+        session.commit()
+        session.add(
+            Student(
+                student_id="S-OWNED", name="普通学生", grade="三年级",
+                current_stage="三阶", status="active",
+            )
+        )
+        session.commit()
+        session.add(
+            Enrollment(
+                student_id="S-OWNED", class_id="C-OWNED",
+                start_date="2026-09-01", status="active",
+            )
+        )
+        session.commit()
+
+    with TestClient(application) as test_client:
+        test_client.post("/login", data={"name": "普通老师", "password": "pass123"})
         yield test_client
 
 
