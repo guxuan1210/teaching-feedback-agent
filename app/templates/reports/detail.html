@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}周报详情{% endblock %}
+{% block content %}
+<h1>周报详情</h1>
+
+<table>
+  <tbody>
+    <tr><th>学生</th><td>{{ student.name if student else report.student_id }}</td></tr>
+    <tr><th>班级</th><td>{{ klass.name if klass else report.class_id }}</td></tr>
+    <tr><th>周期</th><td>{{ report.period_start }} ~ {{ report.period_end }}</td></tr>
+    <tr><th>生成方式</th><td>{{ generation_mode_label }}</td></tr>
+    <tr><th>状态</th>
+      <td>
+        <span class="chip report-status {{ 'finalized' if report.status == 'finalized' else 'draft' }}">
+          {{ '已定稿' if report.status == 'finalized' else '草稿' }}
+        </span>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+{% if report.status == 'draft' %}
+<h2>周报草稿</h2>
+<form method="post" action="/reports/{{ report.report_id }}" class="report-edit">
+  <fieldset>
+    <legend>总结</legend>
+    <textarea name="summary" rows="4">{{ form.summary }}</textarea>
+  </fieldset>
+  <fieldset>
+    <legend>优势（JSON 数组）</legend>
+    <textarea name="strengths" rows="3">{{ form.strengths }}</textarea>
+  </fieldset>
+  <fieldset>
+    <legend>顾虑（JSON 数组）</legend>
+    <textarea name="concerns" rows="3">{{ form.concerns }}</textarea>
+  </fieldset>
+  <fieldset>
+    <legend>建议（JSON 数组）</legend>
+    <textarea name="suggestions" rows="3">{{ form.suggestions }}</textarea>
+  </fieldset>
+  <button type="submit">保存修改</button>
+</form>
+
+<form method="post" action="/reports/{{ report.report_id }}/finalize" class="inline"
+      onsubmit="return confirm('确定定稿这份周报吗？定稿后不可编辑。');">
+  <button type="submit">定稿</button>
+</form>
+{% else %}
+<h2>周报内容</h2>
+<div class="report-body" id="report-text">
+  <h3>总结</h3>
+  <p>{{ report.summary }}</p>
+  <h3>优势</h3>
+  {% if strengths %}<ul>{% for s in strengths %}<li>{{ s }}</li>{% endfor %}</ul>
+  {% else %}<p class="muted">无。</p>{% endif %}
+  <h3>顾虑</h3>
+  {% if concerns %}<ul>{% for c in concerns %}<li>{{ c }}</li>{% endfor %}</ul>
+  {% else %}<p class="muted">无。</p>{% endif %}
+  <h3>建议</h3>
+  {% if suggestions %}<ul>{% for g in suggestions %}<li>{{ g }}</li>{% endfor %}</ul>
+  {% else %}<p class="muted">无。</p>{% endif %}
+</div>
+<button type="button" id="copy-report" class="ghost">复制周报</button>
+{% endif %}
+
+{% if generation_note %}
+<p class="muted">生成说明：{{ generation_note }}</p>
+{% endif %}
+
+<h2>查看来源反馈</h2>
+{% if sources %}
+<ul class="source-list">
+  {% for source in sources %}
+    <li>
+      <a href="/history/{{ source.feedback_type }}/{{ source.feedback_id }}">
+        {{ '晚辅' if source.feedback_type == 'daily' else '专项' }} · {{ source.feedback_id }}
+      </a>
+    </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">暂无来源反馈。</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/reports.js"></script>
+{% endblock %}

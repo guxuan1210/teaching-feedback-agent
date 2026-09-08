@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}周报中心{% endblock %}
+{% block content %}
+<h1>周报中心</h1>
+
+{% if success %}
+  <div class="flash success">{{ success }}</div>
+{% endif %}
+
+<form method="post" action="/reports/generate" class="create-form">
+  <h2>批量生成周报</h2>
+  <label>班级
+    <select name="class_id">
+      <option value="">请选择班级</option>
+      {% for c in classes %}
+        <option value="{{ c.class_id }}" {% if form.class_id == c.class_id %}selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <fieldset>
+    <legend>学生（可多选）</legend>
+    {% for s in students %}
+      <label class="checkbox">
+        <input type="checkbox" name="student_ids" value="{{ s.student_id }}"
+               {% if s.student_id in form.selected_student_ids %}checked{% endif %}>
+        {{ s.name }}
+      </label>
+    {% else %}
+      <p class="muted">暂无可见学生。</p>
+    {% endfor %}
+  </fieldset>
+
+  <label>开始日期 <input type="date" name="period_start" value="{{ form.period_start }}"></label>
+  <label>结束日期 <input type="date" name="period_end" value="{{ form.period_end }}"></label>
+  <label>生成模式
+    <select name="generation_mode">
+      <option value="template" {% if form.generation_mode == 'template' %}selected{% endif %}>规则模板</option>
+      <option value="ai" {% if form.generation_mode == 'ai' %}selected{% endif %}>AI 生成</option>
+    </select>
+  </label>
+  <button type="submit">生成周报</button>
+</form>
+
+<h2>周报列表</h2>
+{% if reports %}
+<table>
+  <thead>
+    <tr><th>学生</th><th>班级</th><th>周期</th><th>状态</th><th>生成方式</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+    {% for r in reports %}
+      <tr>
+        <td>{{ student_names.get(r.student_id, r.student_id) }}</td>
+        <td>{{ class_names.get(r.class_id, r.class_id) }}</td>
+        <td>{{ r.period_start }} ~ {{ r.period_end }}</td>
+        <td>
+          <span class="chip report-status {{ 'finalized' if r.status == 'finalized' else 'draft' }}">
+            {{ '已定稿' if r.status == 'finalized' else '草稿' }}
+          </span>
+        </td>
+        <td>{{ GENERATION_MODE_LABELS.get(r.generation_mode, r.generation_mode) }}</td>
+        <td><a href="/reports/{{ r.report_id }}">查看／编辑</a></td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">暂无周报。</p>
+{% endif %}
+{% endblock %}

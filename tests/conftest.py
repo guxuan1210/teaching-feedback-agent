@@ -528,6 +528,27 @@ def report_scope(profile_feedback) -> None:
 
 
 @pytest.fixture()
+def report_draft(db_session, report_scope) -> WeeklyReport:
+    report = WeeklyReport(
+        report_id="R-DRAFT",
+        student_id="S1",
+        class_id="C1",
+        teacher_id="T1",
+        period_start="2026-09-01",
+        period_end="2026-09-07",
+        generation_mode="template",
+        status="draft",
+        summary="总结",
+        strengths="[]",
+        concerns="[]",
+        suggestions="[]",
+    )
+    db_session.add(report)
+    db_session.commit()
+    return report
+
+
+@pytest.fixture()
 def two_report_drafts(db_session, report_scope) -> list[WeeklyReport]:
     """Two draft reports for the same S1/C1/T1 scope and period."""
     reports = [

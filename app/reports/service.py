@@ -27,6 +27,13 @@ class BatchGenerationResult:
     errors: list[dict]  # each {"student_id": str, "error": str}
 
 
+def list_reports(db: Session, *, class_ids: list[str] | None = None) -> list[WeeklyReport]:
+    stmt = select(WeeklyReport).order_by(WeeklyReport.created_at.desc())
+    if class_ids is not None:
+        stmt = stmt.where(WeeklyReport.class_id.in_(class_ids))
+    return list(db.scalars(stmt))
+
+
 def generate_report(
     db: Session,
     *,

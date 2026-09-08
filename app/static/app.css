@@ -420,3 +420,61 @@ legend {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---------- 周报中心 ---------- */
+.chip.report-status {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.65rem;
+}
+.chip.report-status.draft {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.chip.report-status.finalized {
+  background: var(--good-soft);
+  color: var(--good);
+}
+
+.report-body {
+  background: var(--control-bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1.25rem 1.5rem;
+  max-width: 40rem;
+  margin: 0.5rem 0 1rem;
+}
+.report-body h3 {
+  margin: 1rem 0 0.35rem;
+}
+.report-body h3:first-child { margin-top: 0; }
+.report-body p,
+.report-body ul { margin: 0.25rem 0 0.75rem; }
+
+.report-edit {
+  max-width: 40rem;
+  margin: 1rem 0;
+}
+.report-edit textarea {
+  width: 100%;
+  max-width: 100%;
+  font-family: var(--sans);
+}
+
+#copy-report {
+  margin: 0 0 1.25rem;
+}
+
+.source-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+}
+.source-list li {
+  margin: 0.35rem 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--control-bg);
+  display: inline-block;
+  margin-right: 0.5rem;
+}
