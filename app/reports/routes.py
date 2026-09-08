@@ -21,6 +21,7 @@ from app.catalog import repository as catalog_repository
 from app.catalog.models import Class, Student, Teacher
 from app.core.auth import is_admin, require_login
 from app.core.database import get_db
+from app.feedback.models import DailyFeedback, SpecialFeedback
 from app.reports import service
 from app.reports.models import WeeklyReport
 
@@ -241,6 +242,20 @@ def _detail_context(
         "suggestions", json.dumps(suggestions, ensure_ascii=False)
     )
 
+    sources = []
+    for source in report.sources:
+        if source.feedback_type == "daily":
+            feedback = db.get(DailyFeedback, source.feedback_id)
+        else:
+            feedback = db.get(SpecialFeedback, source.feedback_id)
+        sources.append(
+            {
+                "feedback_type": source.feedback_type,
+                "feedback_id": source.feedback_id,
+                "note": feedback.note if feedback is not None else None,
+            }
+        )
+
     return {
         "report": report,
         "student": student,
@@ -252,7 +267,7 @@ def _detail_context(
         "strengths": strengths,
         "concerns": concerns,
         "suggestions": suggestions,
-        "sources": report.sources,
+        "sources": sources,
         "form": {
             "summary": summary,
             "strengths": strengths_raw,

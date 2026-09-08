@@ -75,6 +75,7 @@
       <a href="/history/{{ source.feedback_type }}/{{ source.feedback_id }}">
         {{ '晚辅' if source.feedback_type == 'daily' else '专项' }} · {{ source.feedback_id }}
       </a>
+      <span class="muted"> · {{ source.note or '—' }}</span>
     </li>
   {% endfor %}
 </ul>
