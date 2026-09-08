@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import CheckConstraint, ForeignKey, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -42,6 +42,12 @@ class WeeklyReport(Base):
         String, nullable=False, default=_utcnow, onupdate=_utcnow
     )
 
+    sources: Mapped[list["WeeklyReportSource"]] = relationship(
+        back_populates="report",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
     __table_args__ = (
         CheckConstraint("period_end >= period_start", name="ck_report_period"),
         CheckConstraint(
@@ -61,6 +67,8 @@ class WeeklyReportSource(Base):
     )
     feedback_type: Mapped[str] = mapped_column(String, primary_key=True)
     feedback_id: Mapped[str] = mapped_column(String, primary_key=True)
+
+    report: Mapped["WeeklyReport"] = relationship(back_populates="sources")
 
     __table_args__ = (
         CheckConstraint(

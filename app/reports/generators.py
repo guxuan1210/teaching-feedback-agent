@@ -10,7 +10,7 @@ validation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 from app.reports.context import ReportContext
 
@@ -22,9 +22,43 @@ class ReportOutput:
     concerns: list[str]
     suggestions: list[str]
 
+    @classmethod
+    def from_mapping(cls, raw: dict) -> "ReportOutput":
+        """Coerce a raw mapping (e.g. a model response) into a ``ReportOutput``."""
+
+        def _str_list(value: object) -> list[str]:
+            if value is None:
+                return []
+            if not isinstance(value, list):
+                value = [value]
+            return [str(item) for item in value]
+
+        summary = raw.get("summary")
+        if not isinstance(summary, str):
+            summary = "" if summary is None else str(summary)
+
+        return cls(
+            summary=summary,
+            strengths=_str_list(raw.get("strengths")),
+            concerns=_str_list(raw.get("concerns")),
+            suggestions=_str_list(raw.get("suggestions")),
+        )
+
 
 class ReportGenerator(Protocol):
     def generate(self, context: ReportContext) -> ReportOutput: ...
+
+
+class AIReportGenerator:
+    """An AI-backed generator that delegates to an injected invoke callable."""
+
+    def __init__(self, invoke: Callable[[dict], dict]) -> None:
+        self._invoke = invoke
+
+    def generate(self, context: ReportContext) -> ReportOutput:
+        payload = context.to_prompt_payload()
+        raw = self._invoke(payload)
+        return ReportOutput.from_mapping(raw)
 
 
 _DIRECTION_LABELS = {

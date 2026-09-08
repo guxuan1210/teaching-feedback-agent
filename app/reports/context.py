@@ -28,6 +28,24 @@ class ReportContext:
     recent_notes: list[str]
     source_keys: list[tuple[str, str]]
 
+    def to_prompt_payload(self) -> dict:
+        """Return a plain dict suitable for serialization to an AI prompt."""
+        return {
+            "student_name": self.student_name,
+            "class_name": self.class_name,
+            "period_start": self.period_start,
+            "period_end": self.period_end,
+            "feedback_count": self.feedback_count,
+            "rating_changes": dict(self.rating_changes),
+            "strengths": [
+                {"text": item.text, "count": item.count} for item in self.strengths
+            ],
+            "concerns": [
+                {"text": item.text, "count": item.count} for item in self.concerns
+            ],
+            "recent_notes": list(self.recent_notes),
+        }
+
 
 def build_report_context(
     db: Session,

@@ -21,6 +21,7 @@ from app.feedback.models import (
     SpecialFeedback,
 )
 from app.main import create_app
+from app.reports.models import WeeklyReport
 from app.sessions.models import ClassSession
 
 
@@ -518,3 +519,47 @@ def profile_feedback(db_session) -> None:
         DailyFeedbackIndicator(feedback_id="F1", indicator_id="P-TIME"),
     ])
     db_session.commit()
+
+
+@pytest.fixture()
+def report_scope(profile_feedback) -> None:
+    """Alias guaranteeing S1/C1/T1 and F1/F2 exist for report service tests."""
+    yield None
+
+
+@pytest.fixture()
+def two_report_drafts(db_session, report_scope) -> list[WeeklyReport]:
+    """Two draft reports for the same S1/C1/T1 scope and period."""
+    reports = [
+        WeeklyReport(
+            report_id="R-D1",
+            student_id="S1",
+            class_id="C1",
+            teacher_id="T1",
+            period_start="2026-09-01",
+            period_end="2026-09-07",
+            generation_mode="template",
+            status="draft",
+            summary="总结",
+            strengths="[]",
+            concerns="[]",
+            suggestions="[]",
+        ),
+        WeeklyReport(
+            report_id="R-D2",
+            student_id="S1",
+            class_id="C1",
+            teacher_id="T1",
+            period_start="2026-09-01",
+            period_end="2026-09-07",
+            generation_mode="template",
+            status="draft",
+            summary="总结",
+            strengths="[]",
+            concerns="[]",
+            suggestions="[]",
+        ),
+    ]
+    db_session.add_all(reports)
+    db_session.commit()
+    return reports

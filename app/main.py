@@ -10,6 +10,7 @@ from app.export.routes import router as export_router
 from app.feedback.routes import router as feedback_router
 from app.history.routes import router as history_router
 from app.profiles.routes import router as profiles_router
+from app.reports.providers import build_ai_generator_from_env
 from app.sessions.routes import router as sessions_router
 from app.core.database import (
     build_engine,
@@ -27,6 +28,7 @@ DEFAULT_SECRET_KEY = "dev-secret-key-change-me"
 def create_app(
     database_url: str | None = None,
     secret_key: str | None = None,
+    ai_report_generator=None,
 ) -> FastAPI:
     if database_url is None:
         database_url = DEFAULT_DATABASE_URL
@@ -46,6 +48,11 @@ def create_app(
     seed_admin(engine)
     application.state.engine = engine
     application.state.session_factory = build_session_factory(engine)
+    application.state.ai_report_generator = (
+        ai_report_generator
+        if ai_report_generator is not None
+        else build_ai_generator_from_env()
+    )
 
     application.include_router(auth_router)
     application.include_router(catalog_router)

@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from app.profiles.service import IndicatorFrequency
 from app.reports.context import ReportContext
-from app.reports.generators import ReportOutput, TemplateReportGenerator
+from app.reports.generators import (
+    AIReportGenerator,
+    ReportOutput,
+    TemplateReportGenerator,
+)
+from app.reports.providers import build_ai_generator_from_env, build_openai_invoke
 from app.reports.validation import validate_report_output
 
 
@@ -76,3 +82,62 @@ def test_validator_rejects_personality_label(report_context):
     )
     with pytest.raises(ValueError):
         validate_report_output(output, report_context)
+
+
+def test_ai_generator_returns_report_output(report_context):
+    generator = AIReportGenerator(
+        lambda payload: {
+            "summary": "总结",
+            "strengths": ["a"],
+            "concerns": [],
+            "suggestions": [],
+        }
+    )
+    result = generator.generate(report_context)
+    assert isinstance(result, ReportOutput)
+    assert result.summary == "总结"
+
+
+def test_report_output_from_mapping_coerces_fields():
+    result = ReportOutput.from_mapping(
+        {"summary": "s", "strengths": [1], "concerns": None, "suggestions": []}
+    )
+    assert result.summary == "s"
+    assert result.strengths == ["1"]
+    assert result.concerns == []
+    assert result.suggestions == []
+
+
+def test_build_ai_generator_from_env_requires_all_vars(monkeypatch):
+    monkeypatch.delenv("REPORT_AI_BASE_URL", raising=False)
+    monkeypatch.delenv("REPORT_AI_API_KEY", raising=False)
+    monkeypatch.delenv("REPORT_AI_MODEL", raising=False)
+    assert build_ai_generator_from_env() is None
+
+
+def test_openai_invoke_parses_content_without_network():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"summary":"hi","strengths":[],"concerns":[],"suggestions":[]}'
+                        }
+                    }
+                ]
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    invoke = build_openai_invoke(
+        "http://example.test", "k", "m", transport=transport
+    )
+    result = invoke({"anything": "payload"})
+    assert result == {
+        "summary": "hi",
+        "strengths": [],
+        "concerns": [],
+        "suggestions": [],
+    }
