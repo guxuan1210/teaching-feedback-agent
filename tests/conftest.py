@@ -13,7 +13,12 @@ from fastapi.testclient import TestClient
 
 from app.catalog.models import Class, Enrollment, Student, Teacher
 from app.core.database import build_engine, build_session_factory, initialize_database
-from app.feedback.models import DailyFeedback, SpecialFeedback
+from app.feedback.models import (
+    DailyFeedback,
+    DailyFeedbackIndicator,
+    Indicator,
+    SpecialFeedback,
+)
 from app.main import create_app
 from app.sessions.models import ClassSession
 
@@ -396,5 +401,78 @@ def void_feedback(db_session) -> None:
         DailyFeedback(feedback_id="F-VOID", session_id="SESSION1", student_id="S2",
                       rating_knowledge=3, rating_habit=3, rating_mindset=3,
                       note=None, status="void"),
+    ])
+    db_session.commit()
+
+
+@pytest.fixture()
+def profile_feedback(db_session) -> None:
+    """Two active daily feedback rows for S1 ("李明") in class C1, plus one
+    voided row that must be excluded.
+
+    F1 (2026-09-01, rating_knowledge=3) precedes F2 (2026-09-03,
+    rating_knowledge=4), so the knowledge trend runs 3 -> 4. Two progress
+    indicators are linked so strengths sort to [("主动检查", 2), ("按时完成", 1)].
+    """
+    teacher = Teacher(teacher_id="T1", name="王老师", role="晚辅教师", status="active")
+    db_session.add(teacher)
+    db_session.commit()
+
+    klass = Class(
+        class_id="C1", name="三年级A班", grade="三年级", class_type="daily",
+        head_teacher_id="T1", status="active",
+    )
+    db_session.add(klass)
+    db_session.commit()
+
+    student = Student(
+        student_id="S1", name="李明", grade="三年级", current_stage="三阶", status="active"
+    )
+    db_session.add(student)
+    db_session.commit()
+
+    db_session.add(
+        Enrollment(student_id="S1", class_id="C1", start_date="2026-09-01", status="active")
+    )
+    db_session.commit()
+
+    db_session.add_all([
+        ClassSession(session_id="SESSION-F1", class_id="C1", teacher_id="T1",
+                     session_type="daily", course_name=None, session_date="2026-09-01",
+                     start_time="16:30", status="active"),
+        ClassSession(session_id="SESSION-F2", class_id="C1", teacher_id="T1",
+                     session_type="daily", course_name=None, session_date="2026-09-03",
+                     start_time="16:30", status="active"),
+        ClassSession(session_id="SESSION-VOID", class_id="C1", teacher_id="T1",
+                     session_type="daily", course_name=None, session_date="2026-09-04",
+                     start_time="16:30", status="active"),
+    ])
+    db_session.commit()
+
+    db_session.add_all([
+        DailyFeedback(feedback_id="F1", session_id="SESSION-F1", student_id="S1",
+                      rating_knowledge=3, rating_habit=3, rating_mindset=3,
+                      note="按时完成作业", status="active"),
+        DailyFeedback(feedback_id="F2", session_id="SESSION-F2", student_id="S1",
+                      rating_knowledge=4, rating_habit=4, rating_mindset=4,
+                      note="今日表现良好", status="active"),
+        DailyFeedback(feedback_id="F-VOID", session_id="SESSION-VOID", student_id="S1",
+                      rating_knowledge=2, rating_habit=2, rating_mindset=2,
+                      note="已作废备注", status="void"),
+    ])
+    db_session.commit()
+
+    db_session.add_all([
+        Indicator(indicator_id="P-CHECK", category="daily_h_progress",
+                  text="主动检查", sort_order=1, active=1),
+        Indicator(indicator_id="P-TIME", category="daily_h_progress",
+                  text="按时完成", sort_order=2, active=1),
+    ])
+    db_session.commit()
+
+    db_session.add_all([
+        DailyFeedbackIndicator(feedback_id="F1", indicator_id="P-CHECK"),
+        DailyFeedbackIndicator(feedback_id="F2", indicator_id="P-CHECK"),
+        DailyFeedbackIndicator(feedback_id="F1", indicator_id="P-TIME"),
     ])
     db_session.commit()
