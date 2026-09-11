@@ -1,87 +1,113 @@
 {% extends "base.html" %}
 {% block title %}周报详情{% endblock %}
 {% block content %}
-<h1>周报详情</h1>
+{% if errors %}
+  <div class="flash error">
+    {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+  </div>
+{% endif %}
 
-<table>
-  <tbody>
-    <tr><th>学生</th><td>{{ student.name if student else report.student_id }}</td></tr>
-    <tr><th>班级</th><td>{{ klass.name if klass else report.class_id }}</td></tr>
-    <tr><th>周期</th><td>{{ report.period_start }} ~ {{ report.period_end }}</td></tr>
-    <tr><th>生成方式</th><td>{{ generation_mode_label }}</td></tr>
-    <tr><th>状态</th>
-      <td>
-        <span class="chip report-status {{ 'finalized' if report.status == 'finalized' else 'draft' }}">
-          {{ '已定稿' if report.status == 'finalized' else '草稿' }}
-        </span>
-      </td>
-    </tr>
-  </tbody>
-</table>
-
-{% if report.status == 'draft' %}
-<h2>周报草稿</h2>
-<form method="post" action="/reports/{{ report.report_id }}" class="report-edit">
-  <fieldset>
-    <legend>总结</legend>
-    <textarea name="summary" rows="4">{{ form.summary }}</textarea>
-  </fieldset>
-  <fieldset>
-    <legend>优势（JSON 数组）</legend>
-    <textarea name="strengths" rows="3">{{ form.strengths }}</textarea>
-  </fieldset>
-  <fieldset>
-    <legend>顾虑（JSON 数组）</legend>
-    <textarea name="concerns" rows="3">{{ form.concerns }}</textarea>
-  </fieldset>
-  <fieldset>
-    <legend>建议（JSON 数组）</legend>
-    <textarea name="suggestions" rows="3">{{ form.suggestions }}</textarea>
-  </fieldset>
-  <button type="submit">保存修改</button>
-</form>
-
-<form method="post" action="/reports/{{ report.report_id }}/finalize" class="inline"
-      onsubmit="return confirm('确定定稿这份周报吗？定稿后不可编辑。');">
-  <button type="submit">定稿</button>
-</form>
-{% else %}
-<h2>周报内容</h2>
-<div class="report-body" id="report-text">
-  <h3>总结</h3>
-  <p>{{ report.summary }}</p>
-  <h3>优势</h3>
-  {% if strengths %}<ul>{% for s in strengths %}<li>{{ s }}</li>{% endfor %}</ul>
-  {% else %}<p class="muted">无。</p>{% endif %}
-  <h3>顾虑</h3>
-  {% if concerns %}<ul>{% for c in concerns %}<li>{{ c }}</li>{% endfor %}</ul>
-  {% else %}<p class="muted">无。</p>{% endif %}
-  <h3>建议</h3>
-  {% if suggestions %}<ul>{% for g in suggestions %}<li>{{ g }}</li>{% endfor %}</ul>
-  {% else %}<p class="muted">无。</p>{% endif %}
+<div class="report-head">
+  <div>
+    <h1>{{ student.name if student else report.student_id }} · 成长周报</h1>
+    <div class="report-meta">
+      <span>{{ klass.name if klass else report.class_id }}</span>
+      <span>{{ report.period_start }} ~ {{ report.period_end }}</span>
+      <span class="chip report-status {{ report.status }}">
+        {{ '已定稿' if report.status == 'finalized' else '草稿' }}
+      </span>
+      <span class="muted">更新于 {{ report.updated_at[:16] if report.updated_at else '—' }}</span>
+    </div>
+  </div>
 </div>
-<button type="button" id="copy-report" class="ghost">复制周报</button>
-{% endif %}
 
-{% if generation_note %}
-<p class="muted">生成说明：{{ generation_note }}</p>
-{% endif %}
+<div class="report-layout">
+  <section class="report-main">
+    <h2>给家长的话</h2>
 
-<h2>查看来源反馈</h2>
-{% if sources %}
-<ul class="source-list">
-  {% for source in sources %}
-    <li>
-      <a href="/history/{{ source.feedback_type }}/{{ source.feedback_id }}">
-        {{ '晚辅' if source.feedback_type == 'daily' else '专项' }} · {{ source.feedback_id }}
-      </a>
-      <span class="muted"> · {{ source.note or '—' }}</span>
-    </li>
-  {% endfor %}
-</ul>
-{% else %}
-<p class="muted">暂无来源反馈。</p>
-{% endif %}
+    {% if report.status == 'draft' %}
+      <form method="post" action="/reports/{{ report.report_id }}" class="report-message-form">
+        <label class="visually-hidden" for="parent-message">给家长的话</label>
+        <textarea id="parent-message" name="parent_message" rows="14">{{ parent_message }}</textarea>
+        <div class="report-message-actions">
+          <button type="submit">保存</button>
+        </div>
+      </form>
+
+      <div class="rewrite-bar">
+        <form method="post" action="/reports/{{ report.report_id }}/rewrite/preview" class="inline">
+          <button type="submit" name="action" value="polish">润色全文</button>
+          <button type="submit" name="action" value="shorter">更简短</button>
+          <button type="submit" name="action" value="regenerate">重新生成</button>
+        </form>
+        <form method="post" action="/reports/{{ report.report_id }}/rewrite/preview" class="instruction-form">
+          <label class="visually-hidden" for="rewrite-instruction">修改指令</label>
+          <input id="rewrite-instruction" type="text" name="instruction" placeholder="输入修改指令，如：把语气改得更温和">
+          <button type="submit">生成修改稿</button>
+        </form>
+      </div>
+
+      <form method="post" action="/reports/{{ report.report_id }}/finalize" class="inline"
+            onsubmit="return confirm('确定定稿这份周报吗？定稿后不可编辑。');">
+        <button type="submit" class="ghost">定稿</button>
+      </form>
+    {% else %}
+      <div class="report-body" id="report-text">{{ parent_message }}</div>
+      <button type="button" id="copy-report" class="ghost">复制周报</button>
+    {% endif %}
+  </section>
+
+  <aside class="report-review">
+    <h2>审核参考</h2>
+
+    <h3>优势</h3>
+    {% if strengths %}<ul class="review-list">{% for s in strengths %}<li>{{ s }}</li>{% endfor %}</ul>
+    {% else %}<p class="muted">无。</p>{% endif %}
+
+    <h3>待关注</h3>
+    {% if concerns %}<ul class="review-list">{% for c in concerns %}<li>{{ c }}</li>{% endfor %}</ul>
+    {% else %}<p class="muted">无。</p>{% endif %}
+
+    <h3>建议</h3>
+    {% if suggestions %}<ul class="review-list">{% for g in suggestions %}<li>{{ g }}</li>{% endfor %}</ul>
+    {% else %}<p class="muted">无。</p>{% endif %}
+
+    <h3>数据概况</h3>
+    <p class="review-data">有效反馈：<strong>{{ feedback_count }}</strong> 次</p>
+    {% if rating_changes %}
+      <ul class="review-list">
+        {% for change in rating_changes %}
+          <li>
+            {{ change.label }}：
+            {% if change.change > 0 %}上升 +{{ change.change }}
+            {% elif change.change < 0 %}下降 {{ change.change }}
+            {% else %}持平{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">暂无评分变化。</p>
+    {% endif %}
+
+    <details class="source-details">
+      <summary>查看来源反馈</summary>
+      {% if sources %}
+      <ul class="source-list">
+        {% for source in sources %}
+          <li>
+            <a href="/history/{{ source.feedback_type }}/{{ source.feedback_id }}">
+              {{ '晚辅' if source.feedback_type == 'daily' else '专项' }} · {{ source.feedback_id }}
+            </a>
+            <span class="muted"> · {{ source.note or '—' }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">暂无来源反馈。</p>
+      {% endif %}
+    </details>
+  </aside>
+</div>
 {% endblock %}
 
 {% block scripts %}

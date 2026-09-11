@@ -17,6 +17,7 @@ from app.reports.context import ReportContext
 
 @dataclass(frozen=True)
 class ReportOutput:
+    parent_message: str
     summary: str
     strengths: list[str]
     concerns: list[str]
@@ -33,11 +34,16 @@ class ReportOutput:
                 value = [value]
             return [str(item) for item in value]
 
+        parent_message = raw.get("parent_message")
+        if not isinstance(parent_message, str):
+            parent_message = "" if parent_message is None else str(parent_message)
+
         summary = raw.get("summary")
         if not isinstance(summary, str):
             summary = "" if summary is None else str(summary)
 
         return cls(
+            parent_message=parent_message,
             summary=summary,
             strengths=_str_list(raw.get("strengths")),
             concerns=_str_list(raw.get("concerns")),
@@ -61,7 +67,7 @@ class AIReportGenerator:
         return ReportOutput.from_mapping(raw)
 
 
-_DIRECTION_LABELS = {
+DIRECTION_LABELS = {
     "knowledge": "知识掌握",
     "habit": "习惯养成",
     "mindset": "学习态度",
@@ -71,15 +77,75 @@ _DIRECTION_LABELS = {
 
 
 class TemplateReportGenerator:
-    """A rule-based generator that only uses facts present in the context."""
+    """A rule-based generator that only uses facts present in the context.
+
+    The template produces both a complete parent-facing ``parent_message`` and
+    the internal structured analysis. The message follows the ordering in the
+    product spec and omits any section whose facts are missing.
+    """
 
     def generate(self, context: ReportContext) -> ReportOutput:
         return ReportOutput(
+            parent_message=self._build_parent_message(context),
             summary=self._build_summary(context),
             strengths=[item.text for item in context.strengths][:5],
             concerns=[item.text for item in context.concerns][:5],
             suggestions=self._build_suggestions(context),
         )
+
+    def _build_parent_message(self, context: ReportContext) -> str:
+        parts: list[str] = []
+
+        if context.feedback_count == 1:
+            parts.append(
+                f"{context.student_name}家长您好，本阶段的一次反馈中观察到孩子近期的学习情况如下。"
+            )
+        else:
+            parts.append(
+                f"{context.student_name}家长您好，本阶段共有 "
+                f"{context.feedback_count} 次有效反馈，总体来看孩子近期的学习情况如下。"
+            )
+
+        strength_texts = [item.text for item in context.strengths]
+        if len(strength_texts) == 1:
+            parts.append(f"值得肯定的是，孩子在「{strength_texts[0]}」方面表现突出。")
+        elif strength_texts:
+            parts.append(
+                f"值得肯定的是，孩子在「{strength_texts[0]}」和「{strength_texts[1]}」方面表现突出。"
+            )
+
+        concern_texts = [item.text for item in context.concerns]
+        if concern_texts:
+            parts.append(
+                f"需要重点关注的是，孩子在「{concern_texts[0]}」方面仍有提升空间。"
+            )
+
+        parts.append(self._build_family_suggestion(context, strength_texts, concern_texts))
+
+        parts.append(
+            "后续我们会在课堂中持续关注并给予针对性指导，也请您在家多鼓励孩子，"
+            "共同帮助孩子稳步进步。"
+        )
+
+        return "\n\n".join(parts)
+
+    def _build_family_suggestion(
+        self,
+        context: ReportContext,
+        strength_texts: list[str],
+        concern_texts: list[str],
+    ) -> str:
+        if concern_texts:
+            return (
+                f"建议在家每天用少量时间，围绕「{concern_texts[0]}」做一点针对性练习，"
+                "强度以孩子不感到负担为宜。"
+            )
+        if strength_texts:
+            return (
+                f"建议在家多肯定孩子在「{strength_texts[0]}」方面的努力，"
+                "帮助孩子保持这份积极性。"
+            )
+        return "建议在家保持规律的学习节奏，并留意孩子的课堂反馈变化。"
 
     def _build_summary(self, context: ReportContext) -> str:
         base = (
@@ -91,7 +157,7 @@ class TemplateReportGenerator:
 
         trends = []
         for key, change in context.rating_changes.items():
-            label = _DIRECTION_LABELS.get(key, key)
+            label = DIRECTION_LABELS.get(key, key)
             if change > 0:
                 direction = "上升"
             elif change < 0:

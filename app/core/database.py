@@ -11,7 +11,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 6
 
 
 class Base(DeclarativeBase):
@@ -57,9 +57,11 @@ def build_session_factory(engine: Engine) -> sessionmaker:
 def _import_all_models() -> None:
     """Import every model module so its table registers on ``Base.metadata``."""
     from app.catalog import models as catalog_models  # noqa: F401
+    from app.chat import models as chat_models  # noqa: F401
     from app.sessions import models as session_models  # noqa: F401
     from app.feedback import models as feedback_models  # noqa: F401
     from app.reports import models as report_models  # noqa: F401
+    from app.wecom import models as wecom_models  # noqa: F401
 
 
 def _add_missing_columns(engine: Engine) -> None:
@@ -80,6 +82,64 @@ def _add_missing_columns(engine: Engine) -> None:
             conn.exec_driver_sql(
                 "ALTER TABLE student ADD COLUMN late_care_level VARCHAR"
             )
+        report_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(weekly_report)")}
+        if "parent_message" not in report_cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE weekly_report ADD COLUMN parent_message TEXT"
+            )
+        wecom_state_cols = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(wecom_chat_state)")
+        }
+        if wecom_state_cols and "pending_question" not in wecom_state_cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE wecom_chat_state ADD COLUMN pending_question TEXT"
+            )
+
+
+def _compose_legacy_parent_message(
+    summary: str, strengths: str, concerns: str, suggestions: str
+) -> str:
+    """Combine the pre-redesign structured fields into a readable message.
+
+    Used only to backfill ``parent_message`` for reports created before the
+    two-layer content model; it never calls a model or introduces new facts.
+    """
+    import json
+
+    def _items(raw: str) -> list[str]:
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+        return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+    lines = [summary.strip()]
+    if (strength_items := _items(strengths)):
+        lines.append("优势：" + "；".join(strength_items))
+    if (concern_items := _items(concerns)):
+        lines.append("待关注：" + "；".join(concern_items))
+    if (suggestion_items := _items(suggestions)):
+        lines.append("建议：" + "；".join(suggestion_items))
+    return "\n\n".join(lines)
+
+
+def _backfill_parent_message(engine: Engine) -> None:
+    """Populate ``parent_message`` for any report that predates the column."""
+    from sqlalchemy import select
+
+    from app.reports.models import WeeklyReport
+
+    factory = build_session_factory(engine)
+    with factory() as session:
+        reports = session.scalars(
+            select(WeeklyReport).where(WeeklyReport.parent_message.is_(None))
+        ).all()
+        for report in reports:
+            report.parent_message = _compose_legacy_parent_message(
+                report.summary, report.strengths, report.concerns, report.suggestions
+            )
+        session.commit()
 
 
 def initialize_database(engine: Engine) -> None:
@@ -95,6 +155,7 @@ def initialize_database(engine: Engine) -> None:
     _import_all_models()
     Base.metadata.create_all(engine)
     _add_missing_columns(engine)
+    _backfill_parent_message(engine)
 
     if current < SCHEMA_VERSION:
         with engine.begin() as conn:

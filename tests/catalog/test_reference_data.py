@@ -115,7 +115,7 @@ def test_v1_database_upgrades_without_rewriting_legacy_stage(tmp_path: Path):
     engine = build_engine(f"sqlite+pysqlite:///{path.as_posix()}")
     initialize_database(engine)
     with engine.connect() as connection:
-        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 3
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 6
         columns = {
             row[1] for row in connection.exec_driver_sql("PRAGMA table_info(student)")
         }
@@ -138,11 +138,11 @@ def test_future_database_version_is_rejected_before_any_schema_change(tmp_path: 
     future = create_engine(f"sqlite+pysqlite:///{path.as_posix()}")
     with future.begin() as connection:
         connection.exec_driver_sql("CREATE TABLE sentinel (value TEXT)")
-        connection.exec_driver_sql("PRAGMA user_version = 4")
+        connection.exec_driver_sql("PRAGMA user_version = 7")
     future.dispose()
 
     engine = build_engine(f"sqlite+pysqlite:///{path.as_posix()}")
-    with pytest.raises(RuntimeError, match="database has 4"):
+    with pytest.raises(RuntimeError, match="database has 7"):
         initialize_database(engine)
     with engine.connect() as connection:
         tables = {
@@ -152,5 +152,5 @@ def test_future_database_version_is_rejected_before_any_schema_change(tmp_path: 
             )
         }
         assert tables == {"sentinel"}
-        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 4
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 7
     engine.dispose()

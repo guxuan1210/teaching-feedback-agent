@@ -2,70 +2,110 @@
 {% block title %}周报中心{% endblock %}
 {% block content %}
 <h1>周报中心</h1>
+<p class="muted">选择班级和周期，查看学生反馈与周报状态，批量生成后进入详情页审核并定稿。</p>
 
 {% if success %}
   <div class="flash success">{{ success }}</div>
 {% endif %}
+{% if errors %}
+  <div class="flash error">
+    {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+  </div>
+{% endif %}
 
-<form method="post" action="/reports/generate" class="create-form">
-  <h2>批量生成周报</h2>
+<form method="get" action="/reports" class="report-filter">
   <label>班级
     <select name="class_id">
       <option value="">请选择班级</option>
       {% for c in classes %}
-        <option value="{{ c.class_id }}" {% if form.class_id == c.class_id %}selected{% endif %}>{{ c.name }}</option>
+        <option value="{{ c.class_id }}" {% if selected_class == c.class_id %}selected{% endif %}>{{ c.name }}</option>
       {% endfor %}
     </select>
   </label>
-
-  <fieldset>
-    <legend>学生（可多选）</legend>
-    {% for s in students %}
-      <label class="checkbox">
-        <input type="checkbox" name="student_ids" value="{{ s.student_id }}"
-               {% if s.student_id in form.selected_student_ids %}checked{% endif %}>
-        {{ s.name }}
-      </label>
-    {% else %}
-      <p class="muted">暂无可见学生。</p>
-    {% endfor %}
-  </fieldset>
-
-  <label>开始日期 <input type="date" name="period_start" value="{{ form.period_start }}"></label>
-  <label>结束日期 <input type="date" name="period_end" value="{{ form.period_end }}"></label>
-  <label>生成模式
-    <select name="generation_mode">
-      <option value="template" {% if form.generation_mode == 'template' %}selected{% endif %}>规则模板</option>
-      <option value="ai" {% if form.generation_mode == 'ai' %}selected{% endif %}>AI 生成</option>
+  <label>周期
+    <input type="date" name="period_start" value="{{ period_start }}">
+    <span class="muted">至</span>
+    <input type="date" name="period_end" value="{{ period_end }}">
+  </label>
+  <label>状态
+    <select name="status">
+      <option value="all" {% if status_filter == 'all' %}selected{% endif %}>全部</option>
+      <option value="none" {% if status_filter == 'none' %}selected{% endif %}>未生成</option>
+      <option value="draft" {% if status_filter == 'draft' %}selected{% endif %}>待审核</option>
+      <option value="finalized" {% if status_filter == 'finalized' %}selected{% endif %}>已定稿</option>
+      <option value="no_data" {% if status_filter == 'no_data' %}selected{% endif %}>暂无数据</option>
     </select>
   </label>
-  <button type="submit">生成周报</button>
+  <button type="submit">筛选</button>
 </form>
 
-<h2>周报列表</h2>
-{% if reports %}
-<table>
-  <thead>
-    <tr><th>学生</th><th>班级</th><th>周期</th><th>状态</th><th>生成方式</th><th>操作</th></tr>
-  </thead>
-  <tbody>
-    {% for r in reports %}
-      <tr>
-        <td>{{ student_names.get(r.student_id, r.student_id) }}</td>
-        <td>{{ class_names.get(r.class_id, r.class_id) }}</td>
-        <td>{{ r.period_start }} ~ {{ r.period_end }}</td>
-        <td>
-          <span class="chip report-status {{ 'finalized' if r.status == 'finalized' else 'draft' }}">
-            {{ '已定稿' if r.status == 'finalized' else '草稿' }}
-          </span>
-        </td>
-        <td>{{ GENERATION_MODE_LABELS.get(r.generation_mode, r.generation_mode) }}</td>
-        <td><a href="/reports/{{ r.report_id }}">查看／编辑</a></td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
+{% if not classes %}
+  <p class="muted">暂无可见班级。</p>
+{% elif not rows %}
+  <p class="muted">没有符合条件的记录。</p>
 {% else %}
-<p class="muted">暂无周报。</p>
+<form method="post" action="/reports/generate" class="report-generate">
+  <input type="hidden" name="class_id" value="{{ selected_class }}">
+  <input type="hidden" name="period_start" value="{{ period_start }}">
+  <input type="hidden" name="period_end" value="{{ period_end }}">
+
+  <div class="report-toolbar">
+    <span class="muted">勾选“未生成且有反馈”的学生后，可批量生成周报。</span>
+    <button type="submit">生成周报</button>
+  </div>
+
+  <table class="report-index">
+    <thead>
+      <tr>
+        <th>学生</th>
+        <th>周期</th>
+        <th>有效反馈</th>
+        <th>周报摘要</th>
+        <th>状态</th>
+        <th>更新时间</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.student_name }}</td>
+          <td>{{ period_start }} ~ {{ period_end }}</td>
+          <td>
+            {% if row.feedback_count > 0 %}
+              {{ row.feedback_count }}
+            {% else %}
+              <span class="muted">暂无数据</span>
+            {% endif %}
+          </td>
+          <td class="excerpt">
+            {% if row.excerpt %}{{ row.excerpt }}{% else %}<span class="muted">—</span>{% endif %}
+          </td>
+          <td>
+            <span class="chip report-status {{ row.status }}">
+              {{ STATUS_LABELS.get(row.status, row.status) }}
+            </span>
+          </td>
+          <td class="muted">
+            {% if row.updated_at %}{{ row.updated_at[:10] }}{% else %}—{% endif %}
+          </td>
+          <td class="row-action">
+            {% if row.status == 'none' %}
+              <label class="checkbox-inline">
+                <input type="checkbox" name="student_ids" value="{{ row.student_id }}"> 生成
+              </label>
+            {% elif row.status == 'draft' %}
+              <a href="/reports/{{ row.report.report_id }}">继续审核</a>
+            {% elif row.status == 'finalized' %}
+              <a href="/reports/{{ row.report.report_id }}">查看／复制</a>
+            {% else %}
+              <span class="muted">周期内没有有效反馈</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</form>
 {% endif %}
 {% endblock %}

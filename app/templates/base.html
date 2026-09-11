@@ -16,6 +16,7 @@
       {% if request.session.get('teacher_id') %}
         <div class="site-user">
           <span class="site-user-name">{{ request.session.get('teacher_name') }}</span>
+          <a href="/account">账号设置</a>
           <a href="/logout">退出</a>
         </div>
       {% endif %}
@@ -25,6 +26,7 @@
       <a href="/history">历史记录</a>
       <a href="/profiles">学生档案</a>
       <a href="/reports">周报中心</a>
+      <a href="/chat">教学助手</a>
       {% if request.session.get('is_admin') %}
         <a href="/catalog">基础信息</a>
         <a href="/catalog/students">学生</a>

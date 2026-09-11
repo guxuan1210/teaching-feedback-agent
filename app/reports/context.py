@@ -8,11 +8,15 @@ statistical queries.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from app.catalog.models import Class, Student
+from app.feedback.models import DailyFeedback, SpecialFeedback
 from app.profiles.service import IndicatorFrequency, build_student_profile
+from app.reports.models import WeeklyReport
 
 
 @dataclass(frozen=True)
@@ -87,5 +91,59 @@ def build_report_context(
         strengths=profile.strengths,
         concerns=profile.concerns,
         recent_notes=profile.recent_notes,
+        source_keys=source_keys,
+    )
+
+
+def _parse_text_list(raw: str) -> list[str]:
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
+def _source_notes(db: Session, report: WeeklyReport) -> list[str]:
+    notes: list[str] = []
+    for source in report.sources:
+        model = DailyFeedback if source.feedback_type == "daily" else SpecialFeedback
+        feedback = db.get(model, source.feedback_id)
+        if feedback is not None and feedback.note and feedback.note.strip():
+            notes.append(feedback.note.strip())
+    return notes
+
+
+def build_rewrite_context(db: Session, report: WeeklyReport) -> ReportContext:
+    """Rebuild a ``ReportContext`` from a persisted report's own facts.
+
+    Used by rewriting so a candidate message is grounded in the report's pinned
+    structured analysis rather than re-reading live feedback that may have
+    changed since generation. Rating changes are omitted because they are not
+    stored on the report, which keeps rewrites from inventing trend numbers.
+    """
+    student = db.get(Student, report.student_id)
+    klass = db.get(Class, report.class_id)
+    if student is None or klass is None:
+        raise ValueError("周报关联的学生或班级不存在")
+
+    def _indicator(text: str) -> IndicatorFrequency:
+        return IndicatorFrequency(
+            indicator_id="", text=text, category="", count=0
+        )
+
+    strengths = [_indicator(item) for item in _parse_text_list(report.strengths)]
+    concerns = [_indicator(item) for item in _parse_text_list(report.concerns)]
+    source_keys = [(s.feedback_type, s.feedback_id) for s in report.sources]
+
+    return ReportContext(
+        student_name=student.name,
+        class_name=klass.name,
+        period_start=report.period_start,
+        period_end=report.period_end,
+        feedback_count=len(source_keys),
+        rating_changes={},
+        strengths=strengths,
+        concerns=concerns,
+        recent_notes=_source_notes(db, report),
         source_keys=source_keys,
     )

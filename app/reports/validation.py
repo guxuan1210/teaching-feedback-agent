@@ -19,6 +19,8 @@ _INT_RE = re.compile(r"\d+")
 
 _ALLOWED_RATING_INTS = (1, 2, 3, 4, 5)
 
+_PARENT_MESSAGE_MAX = 2000
+
 
 def validate_report_output(
     output: ReportOutput, context: ReportContext
@@ -30,7 +32,24 @@ def validate_report_output(
     _validate_string_list(output.suggestions, "suggestions")
     _validate_personality_labels(output.summary)
     _validate_grounded_numbers(output.summary, context)
+    validate_parent_message(output.parent_message, context)
     return output
+
+
+def validate_parent_message(message: object, context: ReportContext) -> str:
+    """Validate a parent-facing message and return it as a stripped string.
+
+    Shared by first generation, quick/dialogue rewriting and candidate
+    confirmation so every machine-written message passes the same checks.
+    """
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("家长沟通正文不能为空")
+    message = message.strip()
+    if len(message) > _PARENT_MESSAGE_MAX:
+        raise ValueError(f"家长沟通正文超出 {_PARENT_MESSAGE_MAX} 字限制")
+    _validate_personality_labels(message)
+    _validate_grounded_numbers(message, context)
+    return message
 
 
 def _validate_summary(summary: object) -> None:
@@ -52,14 +71,14 @@ def _validate_string_list(items: object, name: str) -> None:
             raise ValueError(f"周报字段 {name} 单项超出 120 字限制")
 
 
-def _validate_personality_labels(summary: str) -> None:
+def _validate_personality_labels(text: str) -> None:
     for label in _PERSONALITY_LABELS:
-        if label in summary:
-            raise ValueError("总结包含人格标签，缺乏数据依据")
+        if label in text:
+            raise ValueError("内容包含人格标签，缺乏数据依据")
 
 
-def _validate_grounded_numbers(summary: str, context: ReportContext) -> None:
-    for token in _INT_RE.findall(summary):
+def _validate_grounded_numbers(text: str, context: ReportContext) -> None:
+    for token in _INT_RE.findall(text):
         number = int(token)
         if number not in _ALLOWED_RATING_INTS and number != context.feedback_count:
-            raise ValueError("总结包含未在数据依据中的数字")
+            raise ValueError("内容包含未在数据依据中的数字")

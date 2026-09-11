@@ -12,7 +12,9 @@ from app.reports.service import (
     finalize_report,
     generate_report,
     generate_reports_for_class,
-    update_report_draft,
+    list_report_rows,
+    replace_report_message,
+    update_report_message,
 )
 
 
@@ -60,13 +62,10 @@ def test_edit_finalized_report_is_rejected(db_session, report_scope):
     )
     finalize_report(db_session, report.report_id, teacher_id="T1")
     with pytest.raises(ValueError, match="不可编辑"):
-        update_report_draft(
+        update_report_message(
             db_session,
             report.report_id,
-            summary="新总结",
-            strengths=[],
-            concerns=[],
-            suggestions=[],
+            parent_message="新正文",
         )
 
 
@@ -100,3 +99,65 @@ def test_batch_generation_isolates_failures(db_session, report_scope):
     assert result.errors[0]["student_id"] == "S-MISSING"
     count = db_session.scalar(select(func.count()).select_from(WeeklyReport))
     assert count == 1
+
+
+def test_update_report_message_saves_parent_message(db_session, report_scope):
+    report = generate_report(
+        db_session,
+        student_id="S1",
+        class_id="C1",
+        teacher_id="T1",
+        period_start="2026-09-01",
+        period_end="2026-09-07",
+        requested_mode="template",
+    )
+    updated = update_report_message(
+        db_session, report.report_id, parent_message="新的家长沟通正文"
+    )
+    assert updated.parent_message == "新的家长沟通正文"
+    # internal analysis is untouched by a message edit
+    assert updated.summary == report.summary
+
+
+def test_replace_report_message_rejects_stale_original(db_session, report_scope):
+    report = generate_report(
+        db_session,
+        student_id="S1",
+        class_id="C1",
+        teacher_id="T1",
+        period_start="2026-09-01",
+        period_end="2026-09-07",
+        requested_mode="template",
+    )
+    update_report_message(db_session, report.report_id, parent_message="已更新的正文")
+    with pytest.raises(ValueError, match="已被更新"):
+        replace_report_message(
+            db_session,
+            report.report_id,
+            parent_message="候选正文",
+            expected_original="过期的原文",
+        )
+
+
+def test_list_report_rows_projects_student_status(db_session, report_scope):
+    rows = list_report_rows(
+        db_session, class_id="C1", period_start="2026-09-01", period_end="2026-09-07"
+    )
+    assert [row.student_id for row in rows] == ["S1"]
+    assert rows[0].feedback_count == 2
+    assert rows[0].status == "none"
+
+    generate_report(
+        db_session,
+        student_id="S1",
+        class_id="C1",
+        teacher_id="T1",
+        period_start="2026-09-01",
+        period_end="2026-09-07",
+        requested_mode="template",
+    )
+    rows = list_report_rows(
+        db_session, class_id="C1", period_start="2026-09-01", period_end="2026-09-07"
+    )
+    assert rows[0].status == "draft"
+    assert rows[0].excerpt

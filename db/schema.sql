@@ -1,7 +1,7 @@
 -- =====================================================================
 -- 教学反馈数据采集 Demo · 数据库 Schema（SQLite）
 -- 本文件是可执行 SQLAlchemy 模型（app/*/models.py）的忠实镜像，
--- 共 17 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
+-- 共 22 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
 -- =====================================================================
 
 PRAGMA foreign_keys = ON;
@@ -219,6 +219,7 @@ CREATE TABLE IF NOT EXISTS weekly_report (
     period_end      TEXT NOT NULL,
     generation_mode TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'draft',
+    parent_message  TEXT NOT NULL,
     summary         TEXT NOT NULL,
     strengths       TEXT NOT NULL,
     concerns        TEXT NOT NULL,
@@ -241,4 +242,94 @@ CREATE TABLE IF NOT EXISTS weekly_report_source (
     feedback_id   TEXT NOT NULL,
     PRIMARY KEY (report_id, feedback_type, feedback_id),
     CHECK (feedback_type IN ('daily', 'special'))
+);
+
+-- ---------------------------------------------------------------------
+-- 16-18. 教学助手对话、消息与回答来源
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS chat_conversation (
+    conversation_id TEXT PRIMARY KEY,
+    owner_teacher_id TEXT NOT NULL REFERENCES teacher(teacher_id),
+    scope_type       TEXT NOT NULL,
+    class_id         TEXT NOT NULL REFERENCES class(class_id),
+    student_id       TEXT REFERENCES student(student_id),
+    title            TEXT NOT NULL,
+    date_from        TEXT NOT NULL,
+    date_to          TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'active',
+    last_message_at  TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    CHECK (scope_type IN ('student', 'class')),
+    CHECK (date_to >= date_from),
+    CHECK (status IN ('active', 'archived')),
+    CHECK ((scope_type = 'student' AND student_id IS NOT NULL)
+        OR (scope_type = 'class' AND student_id IS NULL))
+);
+
+CREATE TABLE IF NOT EXISTS chat_message (
+    message_id            TEXT PRIMARY KEY,
+    conversation_id       TEXT NOT NULL REFERENCES chat_conversation(conversation_id) ON DELETE CASCADE,
+    role                  TEXT NOT NULL,
+    content               TEXT NOT NULL,
+    status                TEXT NOT NULL DEFAULT 'completed',
+    model                 TEXT,
+    context_date_from     TEXT,
+    context_date_to       TEXT,
+    context_snapshot      TEXT,
+    error_message         TEXT,
+    created_at            TEXT NOT NULL,
+    CHECK (role IN ('user', 'assistant')),
+    CHECK (status IN ('completed', 'failed'))
+);
+
+CREATE TABLE IF NOT EXISTS chat_message_source (
+    message_id  TEXT NOT NULL REFERENCES chat_message(message_id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL,
+    source_id   TEXT NOT NULL,
+    cited       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (message_id, source_type, source_id),
+    CHECK (source_type IN ('daily', 'special', 'weekly_report')),
+    CHECK (cited IN (0, 1))
+);
+
+-- ---------------------------------------------------------------------
+-- 19-22. 企业微信绑定、会话状态与入站消息去重
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS teacher_wecom_binding (
+    wecom_user_id TEXT PRIMARY KEY,
+    teacher_id    TEXT NOT NULL UNIQUE REFERENCES teacher(teacher_id) ON DELETE CASCADE,
+    bound_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS wecom_binding_code (
+    code_id         TEXT PRIMARY KEY,
+    code_hash       TEXT NOT NULL UNIQUE,
+    teacher_id      TEXT NOT NULL REFERENCES teacher(teacher_id) ON DELETE CASCADE,
+    expires_at      TEXT NOT NULL,
+    used_at         TEXT,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS wecom_chat_state (
+    wecom_user_id         TEXT PRIMARY KEY REFERENCES teacher_wecom_binding(wecom_user_id) ON DELETE CASCADE,
+    conversation_id       TEXT REFERENCES chat_conversation(conversation_id) ON DELETE SET NULL,
+    scope_type            TEXT,
+    class_id              TEXT REFERENCES class(class_id),
+    student_id            TEXT REFERENCES student(student_id),
+    date_from             TEXT,
+    date_to               TEXT,
+    pending_scope_json    TEXT,
+    pending_question      TEXT,
+    last_failed_message_id TEXT,
+    updated_at            TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS wecom_inbound_message (
+    message_id    TEXT PRIMARY KEY,
+    wecom_user_id TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    received_at   TEXT NOT NULL,
+    completed_at  TEXT
 );

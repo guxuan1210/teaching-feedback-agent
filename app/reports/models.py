@@ -31,6 +31,7 @@ class WeeklyReport(Base):
     period_end: Mapped[str] = mapped_column(String, nullable=False)
     generation_mode: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, default="draft")
+    parent_message: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     strengths: Mapped[str] = mapped_column(Text, nullable=False)
     concerns: Mapped[str] = mapped_column(Text, nullable=False)

@@ -19,6 +19,7 @@ def _report(student, classroom, teacher, **overrides) -> WeeklyReport:
         period_end="2026-09-07",
         generation_mode="template",
         status="draft",
+        parent_message="给家长的话",
         summary="总结",
         strengths="[]",
         concerns="[]",
@@ -34,6 +35,7 @@ def test_weekly_report_rejects_reversed_period(db_session, student, classroom, t
         class_id=classroom.class_id, teacher_id=teacher.teacher_id,
         period_start="2026-09-07", period_end="2026-09-01",
         generation_mode="template", status="draft",
+        parent_message="给家长的话",
         summary="总结", strengths="[]", concerns="[]", suggestions="[]",
     )
     db_session.add(report)

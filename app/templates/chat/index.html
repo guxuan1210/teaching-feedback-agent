@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}教学助手{% endblock %}
+{% block content %}
+<div class="chat-layout" id="chat-layout"
+     data-conversation-id="{{ conversation.conversation_id if conversation else '' }}"
+     data-can-write="{{ '1' if can_write else '0' }}"
+     data-model-configured="{{ '1' if model_configured else '0' }}"
+     data-archived="{{ '1' if conversation and conversation.status == 'archived' else '0' }}">
+
+  <aside class="chat-sidebar" id="chat-sidebar">
+    <div class="chat-sidebar-head">
+      <button type="button" class="drawer-close" id="drawer-close" aria-label="关闭">×</button>
+      <h2>教学助手</h2>
+    </div>
+
+    <details class="new-chat" {% if errors and not conversation %}open{% endif %}>
+      <summary>新建对话</summary>
+      <form method="post" action="/chat" class="new-chat-form">
+        <label>范围类型
+          <select name="scope_type" id="scope-type">
+            <option value="student" {% if form.scope_type == 'student' %}selected{% endif %}>学生</option>
+            <option value="class" {% if form.scope_type == 'class' %}selected{% endif %}>班级</option>
+          </select>
+        </label>
+
+        <label>班级
+          <select name="class_id" id="class-select">
+            <option value="">请选择班级</option>
+            {% for c in classes %}
+              <option value="{{ c.class_id }}" {% if form.class_id == c.class_id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label id="student-field">学生
+          <select name="student_id" id="student-select">
+            <option value="">请选择学生</option>
+            {% for s in students %}
+              <option value="{{ s.student_id }}" data-classes="{{ student_class_map.get(s.student_id, []) | join(',') }}"
+                      {% if form.student_id == s.student_id %}selected{% endif %}>{{ s.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label>开始日期 <input type="date" name="date_from" value="{{ form.date_from }}"></label>
+        <label>结束日期 <input type="date" name="date_to" value="{{ form.date_to }}"></label>
+        <button type="submit">创建对话</button>
+      </form>
+    </details>
+
+    <form method="get" action="/chat" class="chat-search">
+      {% if archived %}<input type="hidden" name="archived" value="1">{% endif %}
+      <input type="text" name="q" value="{{ q }}" placeholder="搜索标题或范围">
+    </form>
+
+    {% if archived %}
+      <p class="sidebar-section-title">归档对话 <a href="/chat" class="muted">返回活动</a></p>
+    {% else %}
+      <p class="sidebar-section-title">会话 <a href="/chat?archived=1" class="muted">归档对话</a></p>
+    {% endif %}
+
+    <div class="chat-groups">
+      {% for label, rows in groups %}
+        <h3 class="chat-group-title">{{ label }}</h3>
+        <ul class="chat-list">
+          {% for row in rows %}
+            <li>
+              <a href="/chat/{{ row.conversation.conversation_id }}"
+                 class="chat-item {% if conversation and conversation.conversation_id == row.conversation.conversation_id %}active{% endif %}"
+                 data-conversation-id="{{ row.conversation.conversation_id }}"
+                 data-title="{{ row.conversation.title }}"
+                 data-owner="{{ '1' if row.is_owner else '0' }}">
+                <span class="chat-item-title">{{ row.conversation.title }}</span>
+                <span class="chat-item-sub">{{ row.scope_name }}</span>
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">暂无对话。</p>
+      {% endfor %}
+    </div>
+  </aside>
+
+  <section class="chat-main">
+    {% if not conversation %}
+      <div class="chat-empty" id="chat-empty">
+        <h1>教学助手</h1>
+        <p>选择一个已有对话，或在上方新建一个绑定学生／班级的对话。</p>
+        <p class="muted">对话助手只读业务数据，用于分析、总结、解释和起草内容。</p>
+      </div>
+    {% else %}
+      <header class="chat-head">
+        <button type="button" class="drawer-open" id="drawer-open">☰</button>
+        <div class="chat-head-main">
+          <div class="chat-title-row">
+            <h1 id="chat-title">{{ conversation.title }}</h1>
+            <span class="chip scope-chip">{{ SCOPE_TYPE_LABELS.get(conversation.scope_type, conversation.scope_type) }} · {{ scope_label }}</span>
+            {% if conversation.status == 'archived' %}
+              <span class="chip report-status finalized">已归档</span>
+            {% endif %}
+          </div>
+
+          {% if can_write and conversation.status == 'active' %}
+            <div class="chat-meta">
+              <form method="post" action="/chat/{{ conversation.conversation_id }}/date-range" class="date-range-form">
+                <input type="date" name="date_from" value="{{ conversation.date_from }}">
+                <span class="muted">至</span>
+                <input type="date" name="date_to" value="{{ conversation.date_to }}">
+                <button type="submit" class="ghost">更新日期</button>
+              </form>
+              <details class="chat-more">
+                <summary>更多</summary>
+                <div class="chat-more-menu">
+                  <form method="post" action="/chat/{{ conversation.conversation_id }}/rename" class="rename-form">
+                    <input type="text" name="title" value="{{ conversation.title }}" maxlength="80">
+                    <button type="submit" class="ghost">重命名</button>
+                  </form>
+                  <form method="post" action="/chat/{{ conversation.conversation_id }}/archive"
+                        onsubmit="return confirm('归档后对话只读，确定归档吗？');">
+                    <button type="submit" class="danger">归档对话</button>
+                  </form>
+                </div>
+              </details>
+            </div>
+          {% elif not can_write %}
+            <p class="chat-readonly-banner">管理员只读查看，无法续聊、修改或归档此对话。</p>
+          {% endif %}
+        </div>
+      </header>
+
+      <div class="chat-messages" id="messages">
+        {% for row in messages %}
+          {% set m = row.message %}
+          {% if m.role == 'user' %}
+            <div class="msg user">
+              <div class="msg-avatar">我</div>
+              <div class="bubble">{% for p in row.paragraphs %}<p>{{ p }}</p>{% endfor %}</div>
+            </div>
+          {% elif m.status == 'failed' %}
+            <div class="msg assistant failed" data-message-id="{{ m.message_id }}">
+              <div class="msg-avatar">助</div>
+              <div class="msg-body">
+                <div class="bubble muted">{% for p in row.paragraphs %}<p>{{ p }}</p>{% endfor %}</div>
+                <p class="msg-error">{{ m.error_message or '生成失败' }}</p>
+                {% if can_write and conversation.status == 'active' %}
+                  <button type="button" class="retry-btn ghost" data-message-id="{{ m.message_id }}">重试</button>
+                {% endif %}
+              </div>
+            </div>
+          {% else %}
+            <div class="msg assistant" data-message-id="{{ m.message_id }}">
+              <div class="msg-avatar">助</div>
+              <div class="msg-body">
+                <div class="bubble">{% for p in row.paragraphs %}<p>{{ p }}</p>{% endfor %}</div>
+                <details class="msg-sources source-details">
+                  <summary>回答依据</summary>
+                  {% if row.sources %}
+                    <ul class="source-list">
+                      {% for source in row.sources %}
+                        <li>
+                          <a href="{{ source.url }}">{{ source.label }}</a>
+                          {% if source.cited %}<span class="cited-mark">引用</span>{% endif %}
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  {% else %}
+                    <p class="muted">数据不足，无可用来源。</p>
+                  {% endif %}
+                </details>
+              </div>
+            </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+
+      {% if can_write and conversation.status == 'active' %}
+        <div class="chat-composer">
+          <div class="quick-prompts">
+            <button type="button" class="quick-prompt ghost" data-prompt="请结合时间变化，总结这个学生近期最明显的进步，并给出下一步巩固建议。">总结近期进步</button>
+            <button type="button" class="quick-prompt ghost" data-prompt="请识别这个学生当前最需要优先解决的两个薄弱项，说明依据并给出可执行建议。">分析薄弱项</button>
+            <button type="button" class="quick-prompt ghost" data-prompt="请起草一段可直接发给家长的阶段反馈，先肯定具体进步，再中性说明问题，最后提出一项容易配合的建议。">起草家长沟通</button>
+          </div>
+          <form id="chat-form" class="chat-form">
+            <textarea id="chat-input" rows="1" placeholder="输入问题，Enter 发送，Shift+Enter 换行"
+                      {% if not model_configured %}disabled{% endif %}></textarea>
+            <div class="chat-form-foot">
+              <span class="char-count" id="char-count">0 / 4000</span>
+              <button type="submit" id="chat-send" {% if not model_configured %}disabled{% endif %}>发送</button>
+            </div>
+          </form>
+          {% if not model_configured %}
+            <p class="muted">模型未配置，请联系管理员配置 LLM_BASE_URL、LLM_API_KEY、LLM_MODEL。</p>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      <p class="chat-disclaimer">AI 回答可能存在偏差，请结合原始反馈核查。</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/chat.js"></script>
+{% endblock %}

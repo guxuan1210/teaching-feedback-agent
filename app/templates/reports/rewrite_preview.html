@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}修改稿预览{% endblock %}
+{% block content %}
+<h1>{{ student.name if student else report.student_id }} · 修改稿预览</h1>
+
+{% if errors %}
+  <div class="flash error">
+    {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+  </div>
+{% endif %}
+
+<div class="preview-grid">
+  <section class="preview-pane">
+    <h2>原稿</h2>
+    <div class="preview-body">{{ original }}</div>
+  </section>
+  <section class="preview-pane">
+    <h2>修改稿</h2>
+    <div class="preview-body">{{ candidate }}</div>
+  </section>
+</div>
+
+<div class="preview-actions">
+  <form method="post" action="/reports/{{ report.report_id }}/rewrite/confirm" class="inline">
+    <input type="hidden" name="candidate" value="{{ candidate }}">
+    <input type="hidden" name="expected_original" value="{{ original }}">
+    <button type="submit">确认替换</button>
+  </form>
+  <a class="button-link ghost" href="/reports/{{ report.report_id }}">取消并返回原稿</a>
+</div>
+
+<form method="post" action="/reports/{{ report.report_id }}/rewrite/preview" class="instruction-form preview-reinstruct">
+  <label class="visually-hidden" for="re-instruction">修改指令</label>
+  <input id="re-instruction" type="text" name="instruction" placeholder="修改指令后再次生成，如：再正式一点" value="{{ instruction or '' }}">
+  <button type="submit">重新生成修改稿</button>
+</form>
+{% endblock %}

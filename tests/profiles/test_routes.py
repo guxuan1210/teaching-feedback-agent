@@ -9,6 +9,8 @@ def test_profile_page_shows_aggregated_student_data(client, profile_feedback):
     assert "李明" in response.text
     assert "主动检查" in response.text
     assert "知识掌握" in response.text
+    assert '<details class="source-details">' in response.text
+    assert '<details class="source-details" open>' not in response.text
 
 
 def test_teacher_cannot_open_student_from_unowned_class(teacher_client, profile_feedback):

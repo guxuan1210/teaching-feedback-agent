@@ -135,24 +135,26 @@
 <p class="muted">暂无备注。</p>
 {% endif %}
 
-<h2>来源反馈</h2>
-{% if profile.sources %}
-<table>
-  <thead><tr><th>日期</th><th>类型</th><th>备注</th><th>操作</th></tr></thead>
-  <tbody>
-    {% for source in profile.sources %}
-      <tr>
-        <td>{{ source.session_date }}</td>
-        <td>{{ '晚辅' if source.feedback_type == 'daily' else '专项' }}</td>
-        <td>{{ source.note or '—' }}</td>
-        <td><a href="/history/{{ source.feedback_type }}/{{ source.feedback_id }}">查看反馈</a></td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% else %}
-<p class="muted">暂无来源反馈。</p>
-{% endif %}
+<details class="source-details">
+  <summary>来源反馈</summary>
+  {% if profile.sources %}
+  <table>
+    <thead><tr><th>日期</th><th>类型</th><th>备注</th><th>操作</th></tr></thead>
+    <tbody>
+      {% for source in profile.sources %}
+        <tr>
+          <td>{{ source.session_date }}</td>
+          <td>{{ '晚辅' if source.feedback_type == 'daily' else '专项' }}</td>
+          <td>{{ source.note or '—' }}</td>
+          <td><a href="/history/{{ source.feedback_type }}/{{ source.feedback_id }}">查看反馈</a></td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">暂无来源反馈。</p>
+  {% endif %}
+</details>
 
 {% else %}
 <p class="muted">请选择班级、学生与日期后查看档案。</p>

@@ -1,18 +1,19 @@
-"""Weekly report center: index + batch generation, draft editing, finalizing.
+"""Weekly report center: filtered index, batch generation, two-column detail,
+parent-message editing and previewed rewriting.
 
 Admin teachers see and act on every class and report. Ordinary teachers are
-scoped to the classes they head: the index list is filtered, cross-class
-detail/edit/finalize attempts return 403, and a generate request for an
+scoped to the classes they head: the index is filtered, cross-class
+detail/edit/finalize/rewrite attempts return 403, and a generate request for an
 unowned class returns 403.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -23,43 +24,35 @@ from app.core.auth import is_admin, require_login
 from app.core.database import get_db
 from app.feedback.models import DailyFeedback, SpecialFeedback
 from app.reports import service
+from app.reports.context import build_report_context, build_rewrite_context
+from app.reports.generators import DIRECTION_LABELS
 from app.reports.models import WeeklyReport
+from app.reports.period import default_period
+from app.reports.validation import validate_parent_message
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 router = APIRouter(tags=["reports"])
 
-GENERATION_MODE_LABELS = {
-    "template": "规则模板",
-    "ai": "AI 生成",
+STATUS_LABELS = {
+    "none": "未生成",
+    "no_data": "暂无数据",
+    "draft": "待审核",
+    "finalized": "已定稿",
 }
 
 
-def _scoped_choices(db: Session, teacher: Teacher):
+def _scoped_classes(db: Session, teacher: Teacher) -> list[Class]:
     if is_admin(teacher):
-        return (
-            catalog_repository.list_classes(db),
-            catalog_repository.list_students(db),
-        )
-    return (
-        catalog_repository.list_classes_for_teacher(db, teacher.teacher_id),
-        catalog_repository.list_students_for_teacher(db, teacher.teacher_id),
-    )
-
-
-def _default_range() -> tuple[str, str]:
-    today = date.today()
-    return (today - timedelta(days=28)).isoformat(), today.isoformat()
+        return catalog_repository.list_classes(db)
+    return catalog_repository.list_classes_for_teacher(db, teacher.teacher_id)
 
 
 def _allowed_class_ids(db: Session, teacher: Teacher) -> set[str] | None:
     if is_admin(teacher):
         return None
-    return {
-        c.class_id
-        for c in catalog_repository.list_classes_for_teacher(db, teacher.teacher_id)
-    }
+    return {c.class_id for c in _scoped_classes(db, teacher)}
 
 
 def _load_report(db: Session, teacher: Teacher, report_id: str) -> WeeklyReport:
@@ -72,45 +65,55 @@ def _load_report(db: Session, teacher: Teacher, report_id: str) -> WeeklyReport:
     return report
 
 
+def _load_json_list(raw: str) -> list[str]:
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+# ---------------------------------------------------------------------------
+# Index
+# ---------------------------------------------------------------------------
 def _index_context(
     request: Request,
     db: Session,
     teacher: Teacher,
     *,
-    form: dict | None = None,
+    class_id: str | None = None,
+    period_start: str | None = None,
+    period_end: str | None = None,
+    status: str | None = None,
     errors: list[str] | None = None,
     success: str | None = None,
 ) -> dict:
-    classes, students = _scoped_choices(db, teacher)
+    classes = _scoped_classes(db, teacher)
+    default_start, default_end = default_period()
+
+    selected_class = class_id or (classes[0].class_id if classes else "")
+    start = period_start or default_start
+    end = period_end or default_end
+    status_filter = status or "all"
+
     allowed = _allowed_class_ids(db, teacher)
-    reports = service.list_reports(db, class_ids=allowed)
+    rows: list[service.ReportRow] = []
+    if selected_class and (allowed is None or selected_class in allowed):
+        rows = service.list_report_rows(
+            db, class_id=selected_class, period_start=start, period_end=end
+        )
 
-    student_names = {s.student_id: s.name for s in students}
-    class_names = {c.class_id: c.name for c in classes}
-
-    default_from, default_to = _default_range()
-    if form is None:
-        form = {}
-    class_id = form.get("class_id", "")
-    selected_student_ids = set(form.get("selected_student_ids", []))
-    period_start = form.get("period_start") or default_from
-    period_end = form.get("period_end") or default_to
-    generation_mode = form.get("generation_mode") or "template"
+    if status_filter != "all":
+        rows = [row for row in rows if row.status == status_filter]
 
     return {
         "classes": classes,
-        "students": students,
-        "reports": reports,
-        "student_names": student_names,
-        "class_names": class_names,
-        "form": {
-            "class_id": class_id,
-            "selected_student_ids": selected_student_ids,
-            "period_start": period_start,
-            "period_end": period_end,
-            "generation_mode": generation_mode,
-        },
-        "GENERATION_MODE_LABELS": GENERATION_MODE_LABELS,
+        "selected_class": selected_class,
+        "period_start": start,
+        "period_end": end,
+        "status_filter": status_filter,
+        "rows": rows,
+        "STATUS_LABELS": STATUS_LABELS,
         "errors": errors or [],
         "success": success,
     }
@@ -119,6 +122,10 @@ def _index_context(
 @router.get("/reports", response_class=HTMLResponse)
 def report_index(
     request: Request,
+    class_id: str | None = Query(default=None),
+    period_start: str | None = Query(default=None),
+    period_end: str | None = Query(default=None),
+    status: str | None = Query(default=None),
     teacher: Teacher = Depends(require_login),
     db: Session = Depends(get_db),
 ):
@@ -127,7 +134,17 @@ def report_index(
     return templates.TemplateResponse(
         request,
         "reports/index.html",
-        _index_context(request, db, teacher, errors=errors, success=success),
+        _index_context(
+            request,
+            db,
+            teacher,
+            class_id=class_id,
+            period_start=period_start,
+            period_end=period_end,
+            status=status,
+            errors=errors,
+            success=success,
+        ),
     )
 
 
@@ -138,23 +155,22 @@ def report_generate(
     student_ids: list[str] = Form(default=[]),
     period_start: str = Form(...),
     period_end: str = Form(...),
-    generation_mode: str = Form("template"),
     teacher: Teacher = Depends(require_login),
     db: Session = Depends(get_db),
 ):
-    form = {
-        "class_id": class_id,
-        "selected_student_ids": set(student_ids),
-        "period_start": period_start,
-        "period_end": period_end,
-        "generation_mode": generation_mode,
-    }
-
-    def _error(message: str):
+    def _error(message: str) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
             "reports/index.html",
-            _index_context(request, db, teacher, form=form, errors=[message]),
+            _index_context(
+                request,
+                db,
+                teacher,
+                class_id=class_id,
+                period_start=period_start,
+                period_end=period_end,
+                errors=[message],
+            ),
             status_code=422,
         )
 
@@ -170,9 +186,6 @@ def report_generate(
     if end < start:
         return _error("开始日期不能晚于结束日期")
 
-    if generation_mode not in {"template", "ai"}:
-        return _error("生成模式无效")
-
     if not student_ids:
         return _error("请选择学生")
 
@@ -187,7 +200,7 @@ def report_generate(
         student_ids=student_ids,
         period_start=period_start,
         period_end=period_end,
-        requested_mode=generation_mode,
+        requested_mode="ai",
         ai_generator=request.app.state.ai_report_generator,
     )
 
@@ -199,7 +212,82 @@ def report_generate(
     ]
     if result.created:
         request.session["flash_success"] = f"已生成 {len(result.created)} 份周报"
-    return RedirectResponse("/reports", status_code=303)
+
+    target = (
+        f"/reports?class_id={class_id}&period_start={period_start}"
+        f"&period_end={period_end}"
+    )
+    return RedirectResponse(target, status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Detail
+# ---------------------------------------------------------------------------
+def _detail_context(
+    db: Session,
+    report: WeeklyReport,
+    *,
+    form: dict | None = None,
+    errors: list[str] | None = None,
+) -> dict:
+    student = db.get(Student, report.student_id)
+    klass = db.get(Class, report.class_id)
+
+    strengths = _load_json_list(report.strengths)
+    concerns = _load_json_list(report.concerns)
+    suggestions = _load_json_list(report.suggestions)
+
+    parent_message = (form or {}).get("parent_message", report.parent_message)
+
+    sources = []
+    for source in report.sources:
+        feedback = (
+            db.get(DailyFeedback, source.feedback_id)
+            if source.feedback_type == "daily"
+            else db.get(SpecialFeedback, source.feedback_id)
+        )
+        sources.append(
+            {
+                "feedback_type": source.feedback_type,
+                "feedback_id": source.feedback_id,
+                "note": feedback.note if feedback is not None else None,
+            }
+        )
+
+    rating_changes = _rating_changes(db, report)
+
+    return {
+        "report": report,
+        "student": student,
+        "klass": klass,
+        "parent_message": parent_message,
+        "strengths": strengths,
+        "concerns": concerns,
+        "suggestions": suggestions,
+        "sources": sources,
+        "feedback_count": len(sources),
+        "rating_changes": rating_changes,
+        "errors": errors or [],
+    }
+
+
+def _rating_changes(db: Session, report: WeeklyReport) -> list[dict]:
+    """Best-effort rating trends for the review pane, never fatal on failure."""
+    try:
+        context = build_report_context(
+            db,
+            student_id=report.student_id,
+            class_id=report.class_id,
+            period_start=report.period_start,
+            period_end=report.period_end,
+        )
+    except ValueError:
+        return []
+    changes = []
+    for key, change in context.rating_changes.items():
+        changes.append({"label": DIRECTION_LABELS.get(key, key), "change": change})
+    changes.sort(key=lambda item: abs(item["change"]), reverse=True)
+    return changes
 
 
 @router.get("/reports/{report_id}", response_class=HTMLResponse)
@@ -217,122 +305,28 @@ def report_detail(
     )
 
 
-def _detail_context(
-    db: Session,
-    report: WeeklyReport,
-    *,
-    form: dict | None = None,
-    errors: list[str] | None = None,
-) -> dict:
-    student = db.get(Student, report.student_id)
-    klass = db.get(Class, report.class_id)
-
-    strengths = _load_json_list(report.strengths)
-    concerns = _load_json_list(report.concerns)
-    suggestions = _load_json_list(report.suggestions)
-
-    if form is None:
-        form = {}
-    summary = form.get("summary", report.summary)
-    strengths_raw = form.get(
-        "strengths", json.dumps(strengths, ensure_ascii=False)
-    )
-    concerns_raw = form.get("concerns", json.dumps(concerns, ensure_ascii=False))
-    suggestions_raw = form.get(
-        "suggestions", json.dumps(suggestions, ensure_ascii=False)
-    )
-
-    sources = []
-    for source in report.sources:
-        if source.feedback_type == "daily":
-            feedback = db.get(DailyFeedback, source.feedback_id)
-        else:
-            feedback = db.get(SpecialFeedback, source.feedback_id)
-        sources.append(
-            {
-                "feedback_type": source.feedback_type,
-                "feedback_id": source.feedback_id,
-                "note": feedback.note if feedback is not None else None,
-            }
-        )
-
-    return {
-        "report": report,
-        "student": student,
-        "klass": klass,
-        "generation_mode_label": GENERATION_MODE_LABELS.get(
-            report.generation_mode, report.generation_mode
-        ),
-        "generation_note": report.generation_note,
-        "strengths": strengths,
-        "concerns": concerns,
-        "suggestions": suggestions,
-        "sources": sources,
-        "form": {
-            "summary": summary,
-            "strengths": strengths_raw,
-            "concerns": concerns_raw,
-            "suggestions": suggestions_raw,
-        },
-        "errors": errors or [],
-    }
-
-
-def _load_json_list(raw: str) -> list[str]:
-    try:
-        parsed = json.loads(raw)
-    except (ValueError, TypeError):
-        return []
-    return parsed if isinstance(parsed, list) else []
-
-
 @router.post("/reports/{report_id}")
 def report_edit(
     request: Request,
     report_id: str,
-    summary: str = Form(...),
-    strengths: str = Form(...),
-    concerns: str = Form(...),
-    suggestions: str = Form(...),
+    parent_message: str = Form(...),
     teacher: Teacher = Depends(require_login),
     db: Session = Depends(get_db),
 ):
     report = _load_report(db, teacher, report_id)
 
-    form = {
-        "summary": summary,
-        "strengths": strengths,
-        "concerns": concerns,
-        "suggestions": suggestions,
-    }
-
     def _error(message: str, status_code: int = 422):
         return templates.TemplateResponse(
             request,
             "reports/detail.html",
-            _detail_context(db, report, form=form, errors=[message]),
+            _detail_context(
+                db, report, form={"parent_message": parent_message}, errors=[message]
+            ),
             status_code=status_code,
         )
 
-    parsed_strengths = _parse_json_list_field(strengths)
-    parsed_concerns = _parse_json_list_field(concerns)
-    parsed_suggestions = _parse_json_list_field(suggestions)
-    if (
-        parsed_strengths is None
-        or parsed_concerns is None
-        or parsed_suggestions is None
-    ):
-        return _error("优势／顾虑／建议字段必须是 JSON 数组")
-
     try:
-        service.update_report_draft(
-            db,
-            report_id,
-            summary=summary,
-            strengths=parsed_strengths,
-            concerns=parsed_concerns,
-            suggestions=parsed_suggestions,
-        )
+        service.update_report_message(db, report_id, parent_message=parent_message)
     except ValueError as exc:
         message = str(exc)
         if "定稿周报不可编辑" in message:
@@ -342,14 +336,6 @@ def report_edit(
         return _error(message)
 
     return RedirectResponse(f"/reports/{report_id}", status_code=303)
-
-
-def _parse_json_list_field(raw: str) -> list[str] | None:
-    try:
-        parsed = json.loads(raw)
-    except (ValueError, TypeError):
-        return None
-    return parsed if isinstance(parsed, list) else None
 
 
 @router.post("/reports/{report_id}/finalize")
@@ -374,5 +360,141 @@ def report_finalize(
         if "周报不存在" in str(exc):
             raise HTTPException(status_code=404)
         raise
+
+    return RedirectResponse(f"/reports/{report_id}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Rewrite (quick actions + natural-language instruction)
+# ---------------------------------------------------------------------------
+def _preview_context(
+    db: Session,
+    report: WeeklyReport,
+    *,
+    original: str,
+    candidate: str,
+    action: str | None = None,
+    instruction: str | None = None,
+    errors: list[str] | None = None,
+) -> dict:
+    return {
+        "report": report,
+        "student": db.get(Student, report.student_id),
+        "klass": db.get(Class, report.class_id),
+        "original": original,
+        "candidate": candidate,
+        "action": action,
+        "instruction": instruction,
+        "errors": errors or [],
+    }
+
+
+@router.post("/reports/{report_id}/rewrite/preview", response_class=HTMLResponse)
+def report_rewrite_preview(
+    request: Request,
+    report_id: str,
+    action: str | None = Form(default=None),
+    instruction: str | None = Form(default=None),
+    teacher: Teacher = Depends(require_login),
+    db: Session = Depends(get_db),
+):
+    report = _load_report(db, teacher, report_id)
+    if report.status == "finalized":
+        raise HTTPException(status_code=409, detail="定稿周报不可改写")
+
+    rewriter = request.app.state.rewriter
+    if rewriter is None:
+        return templates.TemplateResponse(
+            request,
+            "reports/detail.html",
+            _detail_context(
+                db, report, errors=["改写服务不可用，请直接编辑正文或稍后重试"]
+            ),
+            status_code=503,
+        )
+
+    try:
+        context = build_rewrite_context(db, report)
+        candidate = rewriter.rewrite(
+            action=action,
+            instruction=instruction,
+            current_message=report.parent_message,
+            context=context,
+        )
+        candidate = validate_parent_message(candidate, context)
+    except Exception:  # noqa: BLE001 - any rewrite failure keeps the original
+        return templates.TemplateResponse(
+            request,
+            "reports/detail.html",
+            _detail_context(
+                db, report, errors=["改写失败，已保留原稿，您可以直接编辑或重试"]
+            ),
+            status_code=502,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "reports/rewrite_preview.html",
+        _preview_context(
+            db,
+            report,
+            original=report.parent_message,
+            candidate=candidate,
+            action=action,
+            instruction=instruction,
+        ),
+    )
+
+
+@router.post("/reports/{report_id}/rewrite/confirm")
+def report_rewrite_confirm(
+    request: Request,
+    report_id: str,
+    candidate: str = Form(...),
+    expected_original: str = Form(...),
+    teacher: Teacher = Depends(require_login),
+    db: Session = Depends(get_db),
+):
+    report = _load_report(db, teacher, report_id)
+    if report.status == "finalized":
+        raise HTTPException(status_code=409, detail="定稿周报不可改写")
+
+    try:
+        context = build_rewrite_context(db, report)
+        candidate = validate_parent_message(candidate, context)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "reports/rewrite_preview.html",
+            _preview_context(
+                db,
+                report,
+                original=report.parent_message,
+                candidate=candidate,
+                errors=[str(exc)],
+            ),
+            status_code=422,
+        )
+
+    try:
+        service.replace_report_message(
+            db,
+            report_id,
+            parent_message=candidate,
+            expected_original=expected_original,
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "reports/rewrite_preview.html",
+            _preview_context(
+                db,
+                report,
+                original=report.parent_message,
+                candidate=candidate,
+                errors=[str(exc)],
+            ),
+            status_code=409,
+        )
 
     return RedirectResponse(f"/reports/{report_id}", status_code=303)

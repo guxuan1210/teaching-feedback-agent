@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}账号设置 · Teaching Agent{% endblock %}
+{% block content %}
+<section class="panel narrow-panel">
+  <h1>账号设置</h1>
+  <h2>绑定企业微信</h2>
+  {% if unbound %}<div class="flash success">已解除企业微信绑定。</div>{% endif %}
+  {% if binding %}
+    <p>已绑定企业微信，可以直接私聊 Teaching Agent。</p>
+    <form method="post" action="/account/wecom-unbind">
+      <button class="danger" type="submit">解除绑定</button>
+    </form>
+  {% else %}
+    <p>生成绑定码后，在 10 分钟内私聊机器人发送下方指令。绑定码仅可使用一次。</p>
+    {% if binding_code %}
+      <div class="binding-code">绑定 {{ binding_code }}</div>
+    {% endif %}
+    <form method="post" action="/account/wecom-binding-code">
+      <button class="button" type="submit">生成绑定码</button>
+    </form>
+  {% endif %}
+</section>
+{% endblock %}
