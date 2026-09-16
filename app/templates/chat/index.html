@@ -130,48 +130,59 @@
       </header>
 
       <div class="chat-messages" id="messages">
-        {% for row in messages %}
-          {% set m = row.message %}
-          {% if m.role == 'user' %}
-            <div class="msg user">
-              <div class="msg-avatar">我</div>
-              <div class="bubble">{% for p in row.paragraphs %}<p>{{ p }}</p>{% endfor %}</div>
-            </div>
-          {% elif m.status == 'failed' %}
-            <div class="msg assistant failed" data-message-id="{{ m.message_id }}">
-              <div class="msg-avatar">助</div>
-              <div class="msg-body">
-                <div class="bubble muted">{% for p in row.paragraphs %}<p>{{ p }}</p>{% endfor %}</div>
-                <p class="msg-error">{{ m.error_message or '生成失败' }}</p>
-                {% if can_write and conversation.status == 'active' %}
-                  <button type="button" class="retry-btn ghost" data-message-id="{{ m.message_id }}">重试</button>
-                {% endif %}
+        <div class="chat-reading-column">
+          {% for row in messages %}
+            {% set m = row.message %}
+            {% if m.role == 'user' %}
+              <div class="msg user">
+                <div class="msg-avatar" aria-hidden="true">我</div>
+                <div class="msg-content">
+                  <div class="msg-meta"><span class="msg-role">我</span>{% if row.channel_label %}<span class="channel-chip chip">{{ row.channel_label }}</span>{% endif %}</div>
+                  <div class="bubble">{% for p in row.paragraphs %}<p>{{ p }}</p>{% endfor %}</div>
+                </div>
               </div>
-            </div>
-          {% else %}
-            <div class="msg assistant" data-message-id="{{ m.message_id }}">
-              <div class="msg-avatar">助</div>
-              <div class="msg-body">
-                <div class="bubble">{% for p in row.paragraphs %}<p>{{ p }}</p>{% endfor %}</div>
-                <details class="msg-sources source-details">
-                  <summary>回答依据</summary>
-                  {% if row.sources %}
-                    <ul class="source-list">
-                      {% for source in row.sources %}
-                        <li>
-                          <a href="{{ source.url }}">{{ source.label }}</a>
-                          {% if source.cited %}<span class="cited-mark">引用</span>{% endif %}
-                        </li>
-                      {% endfor %}
-                    </ul>
-                  {% else %}
-                    <p class="muted">数据不足，无可用来源。</p>
-                  {% endif %}
-                </details>
+            {% elif m.status == 'failed' %}
+              <div class="msg assistant failed" data-message-id="{{ m.message_id }}">
+                <div class="msg-avatar" aria-hidden="true">助</div>
+                <div class="msg-content">
+                  <div class="msg-meta"><span class="msg-role">助</span>{% if row.channel_label %}<span class="channel-chip chip">{{ row.channel_label }}</span>{% endif %}</div>
+                  <div class="msg-body">
+                    <div class="bubble muted">{% for p in row.paragraphs %}<p>{{ p }}</p>{% endfor %}</div>
+                    <p class="msg-error">{{ m.error_message or '生成失败' }}</p>
+                    {% if can_write and conversation.status == 'active' %}
+                      <button type="button" class="retry-btn ghost" data-message-id="{{ m.message_id }}">重试</button>
+                    {% endif %}
+                  </div>
+                </div>
               </div>
-            </div>
-          {% endif %}
-        {% endfor %}
+            {% else %}
+              <div class="msg assistant" data-message-id="{{ m.message_id }}">
+                <div class="msg-avatar" aria-hidden="true">助</div>
+                <div class="msg-content">
+                  <div class="msg-meta"><span class="msg-role">助</span>{% if row.channel_label %}<span class="channel-chip chip">{{ row.channel_label }}</span>{% endif %}</div>
+                  <div class="msg-body">
+                    <div class="bubble">{% for p in row.paragraphs %}<p>{{ p }}</p>{% endfor %}</div>
+                    <details class="msg-sources source-details">
+                      <summary>回答依据</summary>
+                      {% if row.sources %}
+                        <ul class="source-list">
+                          {% for source in row.sources %}
+                            <li>
+                              <a href="{{ source.url }}">{{ source.label }}</a>
+                              {% if source.cited %}<span class="cited-mark">引用</span>{% endif %}
+                            </li>
+                          {% endfor %}
+                        </ul>
+                      {% else %}
+                        <p class="muted">数据不足，无可用来源。</p>
+                      {% endif %}
+                    </details>
+                  </div>
+                </div>
+              </div>
+            {% endif %}
+          {% endfor %}
+        </div>
       </div>
 
       {% if can_write and conversation.status == 'active' %}

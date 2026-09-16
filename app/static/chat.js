@@ -93,11 +93,27 @@
     var avatar = document.createElement("div");
     avatar.className = "msg-avatar";
     avatar.textContent = "我";
+    avatar.setAttribute("aria-hidden", "true");
+
+    var content = document.createElement("div");
+    content.className = "msg-content";
+    var meta = document.createElement("div");
+    meta.className = "msg-meta";
+    var role = document.createElement("span");
+    role.className = "msg-role";
+    role.textContent = "我";
+    var channel = document.createElement("span");
+    channel.className = "channel-chip chip";
+    channel.textContent = "网页";
     var bubble = document.createElement("div");
     bubble.className = "bubble";
     bubble.textContent = text;
+    meta.appendChild(role);
+    meta.appendChild(channel);
+    content.appendChild(meta);
+    content.appendChild(bubble);
     div.appendChild(avatar);
-    div.appendChild(bubble);
+    div.appendChild(content);
     return div;
   }
 
@@ -108,6 +124,18 @@
     var avatar = document.createElement("div");
     avatar.className = "msg-avatar";
     avatar.textContent = "助";
+    avatar.setAttribute("aria-hidden", "true");
+
+    var content = document.createElement("div");
+    content.className = "msg-content";
+    var meta = document.createElement("div");
+    meta.className = "msg-meta";
+    var role = document.createElement("span");
+    role.className = "msg-role";
+    role.textContent = "助";
+    var channel = document.createElement("span");
+    channel.className = "channel-chip chip";
+    channel.textContent = "网页";
 
     var body = document.createElement("div");
     body.className = "msg-body";
@@ -125,8 +153,12 @@
     body.appendChild(status);
     body.appendChild(bubble);
     body.appendChild(sources);
+    meta.appendChild(role);
+    meta.appendChild(channel);
+    content.appendChild(meta);
+    content.appendChild(body);
     element.appendChild(avatar);
-    element.appendChild(body);
+    element.appendChild(content);
 
     return { element: element, body: body, status: status, bubble: bubble, sources: sources };
   }
