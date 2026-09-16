@@ -1,8 +1,10 @@
 from datetime import date
 
 from app.catalog.models import Class, Enrollment, Student, Teacher
+from app.chat import service
+from app.chat.generation import GenerationCoordinator
 from app.chat.models import ChatMessage
-from app.wecom.binding import create_binding_code
+from app.wecom.binding import create_binding_code, unbind_teacher
 from app.wecom.handler import process_scope_choice, process_text
 from app.wecom.models import TeacherWecomBinding, WecomChatState, WecomInboundMessage
 
@@ -181,3 +183,109 @@ def test_scope_choice_continues_original_question(db_session):
         row.content for row in db_session.query(ChatMessage).filter(ChatMessage.role == "user")
     ]
     assert user_messages == ["分析张三最近表现"]
+
+
+def test_wecom_then_web_sees_same_current_conversation(db_session):
+    teacher = _teacher_scope(db_session)
+    db_session.add(TeacherWecomBinding(wecom_user_id="u1", teacher_id=teacher.teacher_id))
+    db_session.commit()
+
+    events = list(
+        process_text(
+            db_session, Provider(), "secret", "m1", "u1", "分析张三最近表现",
+            today=date(2026, 9, 10),
+        )
+    )
+
+    assert events[-1].status == "completed"
+    current = service.get_current_conversation(db_session, teacher)
+    assert current is not None
+    assert current.student_id == "S-W"
+    assert db_session.get(WecomChatState, "u1").conversation_id == current.conversation_id
+
+
+def test_wecom_followup_continues_web_marked_conversation(db_session):
+    teacher = _teacher_scope(db_session)
+    db_session.add(TeacherWecomBinding(wecom_user_id="u1", teacher_id=teacher.teacher_id))
+    db_session.commit()
+
+    conversation = service.create_conversation(
+        db_session, teacher, scope_type="student", class_id="C-W", student_id="S-W",
+        date_from="2026-08-14", date_to="2026-09-10",
+    )
+    service.mark_current_conversation(db_session, teacher, conversation)
+
+    events = list(
+        process_text(
+            db_session, Provider(), "secret", "m1", "u1", "那学习习惯呢？",
+            today=date(2026, 9, 10),
+        )
+    )
+
+    assert events[-1].status == "completed"
+    assert db_session.get(WecomChatState, "u1").conversation_id == conversation.conversation_id
+    user_messages = db_session.query(ChatMessage).filter(ChatMessage.role == "user").all()
+    assert len(user_messages) == 1
+    assert user_messages[0].conversation_id == conversation.conversation_id
+
+
+def test_concurrent_second_send_is_rejected_without_saving(db_session):
+    teacher = _teacher_scope(db_session)
+    db_session.add(TeacherWecomBinding(wecom_user_id="u1", teacher_id=teacher.teacher_id))
+    db_session.commit()
+    coordinator = GenerationCoordinator()
+
+    first = list(
+        process_text(
+            db_session, Provider(), "secret", "m1", "u1", "分析张三最近表现",
+            today=date(2026, 9, 10), coordinator=coordinator,
+        )
+    )
+    assert first[-1].status == "completed"
+    conversation_id = db_session.get(WecomChatState, "u1").conversation_id
+
+    assert coordinator.try_acquire(conversation_id) is True
+    user_before = db_session.query(ChatMessage).filter(ChatMessage.role == "user").count()
+    second = list(
+        process_text(
+            db_session, Provider(), "secret", "m2", "u1", "那学习习惯呢？",
+            today=date(2026, 9, 10), coordinator=coordinator,
+        )
+    )
+    coordinator.release(conversation_id)
+
+    assert second[-1].status == "failed"
+    assert "仍在分析" in second[-1].content
+    user_after = db_session.query(ChatMessage).filter(ChatMessage.role == "user").count()
+    assert user_after == user_before
+
+
+def test_unbind_and_rebind_preserves_unified_current_conversation(db_session):
+    teacher = _teacher_scope(db_session)
+    db_session.add(TeacherWecomBinding(wecom_user_id="u1", teacher_id=teacher.teacher_id))
+    db_session.commit()
+    list(
+        process_text(
+            db_session, Provider(), "secret", "m1", "u1", "分析张三最近表现",
+            today=date(2026, 9, 10),
+        )
+    )
+    current = service.get_current_conversation(db_session, teacher)
+    assert current is not None
+
+    unbind_teacher(db_session, teacher.teacher_id)
+
+    assert db_session.get(WecomChatState, "u1") is None
+    assert service.get_current_conversation(db_session, teacher) is not None
+
+    code, _ = create_binding_code(db_session, teacher.teacher_id, "secret")
+    list(process_text(db_session, Provider(), "secret", "rebind", "u1", f"绑定 {code}"))
+    followup = list(
+        process_text(
+            db_session, Provider(), "secret", "m2", "u1", "那学习习惯呢？",
+            today=date(2026, 9, 10),
+        )
+    )
+
+    assert followup[-1].status == "completed"
+    assert db_session.get(WecomChatState, "u1").conversation_id == current.conversation_id

@@ -1,7 +1,16 @@
 from app.catalog.models import Class, Enrollment, Student, Teacher
 from app.chat import service
-from app.chat.generation import stream_generation
+from app.chat.generation import GenerationCoordinator, stream_generation
 from app.chat.models import ChatMessage
+
+
+def test_generation_coordinator_serializes_same_conversation():
+    coordinator = GenerationCoordinator()
+    assert coordinator.try_acquire("CHAT-A") is True
+    assert coordinator.try_acquire("CHAT-A") is False
+    assert coordinator.try_acquire("CHAT-B") is True
+    coordinator.release("CHAT-A")
+    assert coordinator.try_acquire("CHAT-A") is True
 
 
 class Provider:
@@ -37,7 +46,8 @@ def _prepared(db):
         date_from="2026-08-14", date_to="2026-09-10",
     )
     return service.prepare_send(
-        db, teacher, conversation.conversation_id, "总结表现", "fake-model"
+        db, teacher, conversation.conversation_id, "总结表现", "fake-model",
+        channel="web",
     )
 
 

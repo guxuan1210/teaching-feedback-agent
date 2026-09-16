@@ -1,4 +1,3 @@
-import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -8,6 +7,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth.routes import router as auth_router
 from app.catalog.routes import router as catalog_router
+from app.chat.generation import GenerationCoordinator
 from app.chat.providers import (
     ChatProvider,
     build_chat_provider_from_env,
@@ -91,8 +91,7 @@ def create_app(
     application.state.rewriter = (
         rewriter if rewriter is not None else build_rewriter_from_env()
     )
-    application.state.active_generations = set()
-    application.state.generation_lock = threading.Lock()
+    application.state.generation_coordinator = GenerationCoordinator()
     resolved_wecom_config = wecom_config or WecomConfig(False, None, None, None)
     if resolved_wecom_config.enabled:
         gateway = WecomGateway(
@@ -101,6 +100,7 @@ def create_app(
             chat_provider=application.state.chat_provider,
             binding_secret=application.state.secret_key,
             client_factory=wecom_client_factory,
+            generation_coordinator=application.state.generation_coordinator,
         )
     application.state.wecom_gateway = gateway
     application.state.wecom_config = resolved_wecom_config

@@ -63,6 +63,66 @@ def test_legacy_report_backfills_parent_message(tmp_path):
     engine.dispose()
 
 
+def test_backfill_teacher_chat_state_promotes_only_valid_conversations(db_session, engine):
+    from app.catalog.models import Class, Student, Teacher
+    from app.chat.models import ChatConversation, TeacherChatState
+    from app.core.database import _backfill_teacher_chat_state
+    from app.wecom.models import TeacherWecomBinding, WecomChatState
+
+    teachers = [
+        Teacher(teacher_id="T-ACTIVE", name="王老师", role="晚辅教师", status="active"),
+        Teacher(teacher_id="T-ARCHIVED", name="李老师", role="晚辅教师", status="active"),
+        Teacher(teacher_id="T-FOREIGN", name="赵老师", role="晚辅教师", status="active"),
+        Teacher(teacher_id="T-OTHER", name="钱老师", role="晚辅教师", status="active"),
+    ]
+    db_session.add_all(teachers)
+    db_session.commit()
+    db_session.add(
+        Class(
+            class_id="C-BF", name="三年级A班", grade="三年级", class_type="daily",
+            head_teacher_id="T-ACTIVE", status="active",
+        )
+    )
+    db_session.commit()
+    db_session.add(Student(student_id="S-BF", name="张三", grade="三年级", status="active"))
+    db_session.commit()
+
+    def _conversation(cid, owner_id, status):
+        return ChatConversation(
+            conversation_id=cid, owner_teacher_id=owner_id, scope_type="student",
+            class_id="C-BF", student_id="S-BF", title="张三教学分析",
+            date_from="2026-09-01", date_to="2026-09-08", status=status,
+        )
+
+    db_session.add_all([
+        _conversation("CHAT-ACTIVE", "T-ACTIVE", "active"),
+        _conversation("CHAT-ARCHIVED", "T-ARCHIVED", "archived"),
+        _conversation("CHAT-FOREIGN", "T-OTHER", "active"),
+    ])
+    db_session.commit()
+    db_session.add_all([
+        TeacherWecomBinding(wecom_user_id="u-active", teacher_id="T-ACTIVE"),
+        TeacherWecomBinding(wecom_user_id="u-archived", teacher_id="T-ARCHIVED"),
+        TeacherWecomBinding(wecom_user_id="u-foreign", teacher_id="T-FOREIGN"),
+    ])
+    db_session.commit()
+    db_session.add_all([
+        WecomChatState(wecom_user_id="u-active", conversation_id="CHAT-ACTIVE"),
+        WecomChatState(wecom_user_id="u-archived", conversation_id="CHAT-ARCHIVED"),
+        WecomChatState(wecom_user_id="u-foreign", conversation_id="CHAT-FOREIGN"),
+    ])
+    db_session.commit()
+
+    _backfill_teacher_chat_state(engine)
+
+    active_state = db_session.get(TeacherChatState, "T-ACTIVE")
+    assert active_state is not None
+    assert active_state.current_conversation_id == "CHAT-ACTIVE"
+    assert db_session.get(TeacherChatState, "T-ARCHIVED") is None
+    assert db_session.get(TeacherChatState, "T-FOREIGN") is None
+    assert db_session.get(TeacherChatState, "T-OTHER") is None
+
+
 def test_daily_rating_rejects_values_outside_one_to_five(db_session, daily_session, student):
     row = DailyFeedback(
         feedback_id="F-invalid", session_id=daily_session.session_id,
@@ -81,7 +141,8 @@ def test_schema_sql_mirrors_current_model_fields():
     assert "parent_message" in schema
     assert "generation_note" in schema
     assert "finalized_at" in schema
-    assert "共 22 张表" in schema
+    assert "共 23 张表" in schema
+    assert "channel" in schema
     for table in (
         "stage_dict",
         "late_care_level_dict",
@@ -93,6 +154,7 @@ def test_schema_sql_mirrors_current_model_fields():
         "chat_conversation",
         "chat_message",
         "chat_message_source",
+        "teacher_chat_state",
         "teacher_wecom_binding",
         "wecom_binding_code",
         "wecom_chat_state",

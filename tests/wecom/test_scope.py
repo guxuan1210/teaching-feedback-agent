@@ -1,7 +1,6 @@
 from datetime import date
 
 from app.catalog.models import Class, Enrollment, Student, Teacher
-from app.wecom.models import TeacherWecomBinding, WecomChatState
 from app.wecom.scope import resolve_scope
 
 
@@ -65,23 +64,9 @@ def test_duplicate_student_name_requires_choice(db_session):
     assert {item.student_id for item in result.candidates} == {"S1", "S2"}
 
 
-def test_follow_up_reuses_authorized_saved_scope(db_session):
-    teacher, klass, student = _add_scope(db_session)
-    db_session.add(
-        TeacherWecomBinding(wecom_user_id="u1", teacher_id=teacher.teacher_id)
-    )
-    db_session.commit()
-    state = WecomChatState(
-        wecom_user_id="u1", scope_type="student", class_id=klass.class_id,
-        student_id=student.student_id, date_from="2026-08-01", date_to="2026-08-31",
-    )
-    db_session.add(state)
-    db_session.commit()
+def test_follow_up_without_name_requires_scope(db_session):
+    teacher, _, _ = _add_scope(db_session)
 
-    result = resolve_scope(
-        db_session, teacher, "那学习习惯呢？", state=state, today=date(2026, 9, 10)
-    )
+    result = resolve_scope(db_session, teacher, "那学习习惯呢？", today=date(2026, 9, 10))
 
-    assert result.status == "resolved"
-    assert result.scope.student_id == student.student_id
-    assert result.scope.date_from == "2026-08-01"
+    assert result.status == "scope_required"

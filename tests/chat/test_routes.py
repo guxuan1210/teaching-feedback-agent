@@ -7,6 +7,14 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.chat.routes import _channel_label
+
+
+def test_channel_label_maps_known_channels_and_defaults_empty():
+    assert _channel_label("web") == "网页"
+    assert _channel_label("wecom") == "企业微信"
+    assert _channel_label(None) == ""
+    assert _channel_label("unknown") == ""
 
 
 def _create_student_conversation(client, class_id="C-OWNED", student_id="S-OWNED"):

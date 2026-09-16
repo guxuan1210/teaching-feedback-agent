@@ -131,12 +131,17 @@ def _message_rows(db: Session, conversation: ChatConversation) -> list[dict]:
         row = {
             "message": message,
             "paragraphs": _paragraphs(message.content),
+            "channel_label": _channel_label(message.channel),
             "sources": service.load_message_sources(db, message.message_id)
             if message.role == "assistant" and message.status == "completed"
             else [],
         }
         rows.append(row)
     return rows
+
+
+def _channel_label(channel: str | None) -> str:
+    return {"web": "网页", "wecom": "企业微信"}.get(channel or "", "")
 
 
 def _paragraphs(text: str) -> list[str]:
@@ -361,17 +366,11 @@ def chat_update_dates(
 # Streaming helpers
 # ---------------------------------------------------------------------------
 def _acquire_generation(request: Request, conversation_id: str) -> bool:
-    with request.app.state.generation_lock:
-        active = request.app.state.active_generations
-        if conversation_id in active:
-            return False
-        active.add(conversation_id)
-        return True
+    return request.app.state.generation_coordinator.try_acquire(conversation_id)
 
 
 def _release_generation(request: Request, conversation_id: str) -> None:
-    with request.app.state.generation_lock:
-        request.app.state.active_generations.discard(conversation_id)
+    request.app.state.generation_coordinator.release(conversation_id)
 
 
 def _sse(name: str, payload: dict) -> str:
@@ -408,18 +407,23 @@ def chat_send(
     if provider is None:
         raise HTTPException(status_code=503, detail="模型未配置，请联系管理员")
 
+    if not _acquire_generation(request, conversation_id):
+        raise HTTPException(status_code=409, detail="该对话正在回答")
+
     try:
         prepared = service.prepare_send(
-            db, teacher, conversation_id, payload.content, provider.model
+            db, teacher, conversation_id, payload.content, provider.model,
+            channel="web",
         )
     except service.ChatError as exc:
+        _release_generation(request, conversation_id)
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
     except Exception:
+        _release_generation(request, conversation_id)
         logger.exception("Unexpected error while preparing a chat message")
         raise HTTPException(status_code=500, detail="生成准备失败，请稍后重试")
 
-    if not _acquire_generation(request, conversation_id):
-        raise HTTPException(status_code=409, detail="该对话已有生成任务")
+    service.mark_current_conversation(db, teacher, prepared.conversation)
 
     return StreamingResponse(
         _stream_reply(request, db, prepared, provider),
@@ -440,18 +444,22 @@ def chat_retry(
     if provider is None:
         raise HTTPException(status_code=503, detail="模型未配置，请联系管理员")
 
+    if not _acquire_generation(request, conversation_id):
+        raise HTTPException(status_code=409, detail="该对话正在回答")
+
     try:
         prepared = service.prepare_retry(
             db, teacher, conversation_id, payload.message_id, provider.model
         )
     except service.ChatError as exc:
+        _release_generation(request, conversation_id)
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
     except Exception:
+        _release_generation(request, conversation_id)
         logger.exception("Unexpected error while preparing a chat retry")
         raise HTTPException(status_code=500, detail="生成准备失败，请稍后重试")
 
-    if not _acquire_generation(request, conversation_id):
-        raise HTTPException(status_code=409, detail="该对话已有生成任务")
+    service.mark_current_conversation(db, teacher, prepared.conversation)
 
     return StreamingResponse(
         _stream_reply(request, db, prepared, provider),

@@ -90,11 +90,30 @@ def test_prepare_send_saves_user_message(db_session):
     teacher, _ = _seed(db_session)
     conversation = _student_conversation(db_session, teacher)
     prepared = service.prepare_send(
-        db_session, teacher, conversation.conversation_id, "总结一下", "fake-model"
+        db_session, teacher, conversation.conversation_id, "总结一下", "fake-model", channel="web"
     )
     assert prepared.user_message.role == "user"
     assert prepared.user_message.content == "总结一下"
     assert prepared.user_message.status == "completed"
+
+
+def test_messages_inherit_user_channel(db_session):
+    teacher, _ = _seed(db_session)
+    conversation = _student_conversation(db_session, teacher)
+
+    ok = service.prepare_send(
+        db_session, teacher, conversation.conversation_id, "总结", "fake-model", channel="wecom"
+    )
+    assert ok.user_message.channel == "wecom"
+    saved = service.save_assistant_message(db_session, ok, "回答", set())
+    assert saved.channel == "wecom"
+
+    bad = service.prepare_send(
+        db_session, teacher, conversation.conversation_id, "再问", "fake-model", channel="web"
+    )
+    failed = service.save_failed_message(db_session, bad, "部分", "模型服务中断")
+    assert bad.user_message.channel == "web"
+    assert failed.channel == "web"
 
 
 def test_parse_citations_filters_invalid_numbers():
@@ -122,7 +141,7 @@ def test_retry_reuses_user_message(db_session):
     teacher, _ = _seed(db_session)
     conversation = _student_conversation(db_session, teacher)
     prepared = service.prepare_send(
-        db_session, teacher, conversation.conversation_id, "再试一次", "fake-model"
+        db_session, teacher, conversation.conversation_id, "再试一次", "fake-model", channel="web"
     )
     failed_id = prepared.assistant_message_id
     service.save_failed_message(db_session, prepared, "部分", "模型服务中断")
@@ -139,12 +158,12 @@ def test_retry_blocked_after_later_success(db_session):
     teacher, _ = _seed(db_session)
     conversation = _student_conversation(db_session, teacher)
     first = service.prepare_send(
-        db_session, teacher, conversation.conversation_id, "第一个问题", "fake-model"
+        db_session, teacher, conversation.conversation_id, "第一个问题", "fake-model", channel="web"
     )
     service.save_failed_message(db_session, first, "部分", "模型服务中断")
 
     second = service.prepare_send(
-        db_session, teacher, conversation.conversation_id, "第二个问题", "fake-model"
+        db_session, teacher, conversation.conversation_id, "第二个问题", "fake-model", channel="web"
     )
     service.save_assistant_message(db_session, second, "成功回答", set())
 
@@ -162,7 +181,7 @@ def test_archive_blocks_send(db_session):
     service.archive_conversation(db_session, teacher, conversation.conversation_id)
     with pytest.raises(service.ChatError) as exc:
         service.prepare_send(
-            db_session, teacher, conversation.conversation_id, "再发一条", "fake-model"
+            db_session, teacher, conversation.conversation_id, "再发一条", "fake-model", channel="web"
         )
     assert exc.value.status_code == 403
 
@@ -171,7 +190,7 @@ def test_delete_conversation_cascades_to_messages(db_session):
     teacher, _ = _seed(db_session)
     conversation = _student_conversation(db_session, teacher)
     prepared = service.prepare_send(
-        db_session, teacher, conversation.conversation_id, "总结一下", "fake-model"
+        db_session, teacher, conversation.conversation_id, "总结一下", "fake-model", channel="web"
     )
     service.save_assistant_message(db_session, prepared, "回答", set())
 

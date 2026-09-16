@@ -1,7 +1,7 @@
 -- =====================================================================
 -- 教学反馈数据采集 Demo · 数据库 Schema（SQLite）
 -- 本文件是可执行 SQLAlchemy 模型（app/*/models.py）的忠实镜像，
--- 共 22 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
+-- 共 23 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
 -- =====================================================================
 
 PRAGMA foreign_keys = ON;
@@ -274,13 +274,15 @@ CREATE TABLE IF NOT EXISTS chat_message (
     content               TEXT NOT NULL,
     status                TEXT NOT NULL DEFAULT 'completed',
     model                 TEXT,
+    channel               TEXT,
     context_date_from     TEXT,
     context_date_to       TEXT,
     context_snapshot      TEXT,
     error_message         TEXT,
     created_at            TEXT NOT NULL,
     CHECK (role IN ('user', 'assistant')),
-    CHECK (status IN ('completed', 'failed'))
+    CHECK (status IN ('completed', 'failed')),
+    CHECK (channel IS NULL OR channel IN ('web', 'wecom'))
 );
 
 CREATE TABLE IF NOT EXISTS chat_message_source (
@@ -291,6 +293,12 @@ CREATE TABLE IF NOT EXISTS chat_message_source (
     PRIMARY KEY (message_id, source_type, source_id),
     CHECK (source_type IN ('daily', 'special', 'weekly_report')),
     CHECK (cited IN (0, 1))
+);
+
+CREATE TABLE IF NOT EXISTS teacher_chat_state (
+    teacher_id             TEXT PRIMARY KEY REFERENCES teacher(teacher_id) ON DELETE CASCADE,
+    current_conversation_id TEXT REFERENCES chat_conversation(conversation_id) ON DELETE SET NULL,
+    updated_at             TEXT NOT NULL
 );
 
 -- ---------------------------------------------------------------------

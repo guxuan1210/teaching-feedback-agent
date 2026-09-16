@@ -28,6 +28,7 @@ from app.chat.models import (
     ChatConversation,
     ChatMessage,
     ChatMessageSource,
+    TeacherChatState,
     _utcnow,
 )
 from app.chat.prompts import build_messages
@@ -227,6 +228,7 @@ def archive_conversation(
     conversation = get_writable(db, teacher, conversation_id)
     conversation.status = "archived"
     conversation.updated_at = _utcnow()
+    clear_current_conversation(db, teacher.teacher_id, conversation_id)
     db.commit()
     return conversation
 
@@ -236,6 +238,7 @@ def delete_conversation(
 ) -> None:
     conversation = get_writable(db, teacher, conversation_id)
     db.delete(conversation)
+    clear_current_conversation(db, teacher.teacher_id, conversation_id)
     db.commit()
 
 
@@ -259,6 +262,64 @@ def update_conversation_dates(
     conversation.updated_at = _utcnow()
     db.commit()
     return conversation
+
+
+# ---------------------------------------------------------------------------
+# Unified current conversation
+# ---------------------------------------------------------------------------
+def _current_conversation_valid(db: Session, teacher: Teacher, conversation: ChatConversation) -> bool:
+    if conversation.status != "active":
+        return False
+    if not _can_write(conversation, teacher):
+        return False
+    klass = db.get(Class, conversation.class_id)
+    if klass is None or klass.status != "active":
+        return False
+    allowed = _allowed_class_ids(db, teacher)
+    if allowed is not None and conversation.class_id not in allowed:
+        return False
+    if conversation.scope_type == "student" and conversation.student_id:
+        student = db.get(Student, conversation.student_id)
+        if student is None or student.status != "active":
+            return False
+    return True
+
+
+def get_current_conversation(db: Session, teacher: Teacher) -> ChatConversation | None:
+    state = db.get(TeacherChatState, teacher.teacher_id)
+    if state is None or state.current_conversation_id is None:
+        return None
+    conversation = db.get(ChatConversation, state.current_conversation_id)
+    if conversation is None or not _current_conversation_valid(db, teacher, conversation):
+        clear_current_conversation(db, teacher.teacher_id, state.current_conversation_id)
+        return None
+    return conversation
+
+
+def mark_current_conversation(
+    db: Session, teacher: Teacher, conversation: ChatConversation
+) -> None:
+    if not _can_write(conversation, teacher) or conversation.status != "active":
+        return
+    state = db.get(TeacherChatState, teacher.teacher_id)
+    if state is None:
+        state = TeacherChatState(teacher_id=teacher.teacher_id)
+        db.add(state)
+    state.current_conversation_id = conversation.conversation_id
+    state.updated_at = _utcnow()
+    db.commit()
+
+
+def clear_current_conversation(
+    db: Session, teacher_id: str, conversation_id: str | None = None
+) -> None:
+    state = db.get(TeacherChatState, teacher_id)
+    if state is None:
+        return
+    if conversation_id is not None and state.current_conversation_id != conversation_id:
+        return
+    db.delete(state)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +371,8 @@ def prepare_send(
     conversation_id: str,
     content: str,
     model: str,
+    *,
+    channel: str,
 ) -> PreparedSend:
     conversation = get_writable(db, teacher, conversation_id)
     _validate_writable_active(db, teacher, conversation)
@@ -336,6 +399,7 @@ def prepare_send(
         role="user",
         content=content,
         status="completed",
+        channel=channel,
     )
     db.add(user_message)
     conversation.last_message_at = _utcnow()
@@ -443,6 +507,7 @@ def save_assistant_message(
         content=content,
         status="completed",
         model=prepared.model,
+        channel=prepared.user_message.channel,
         context_date_from=prepared.context.date_from,
         context_date_to=prepared.context.date_to,
         context_snapshot=snapshot,
@@ -476,6 +541,7 @@ def save_failed_message(
         content=partial_text,
         status="failed",
         model=prepared.model,
+        channel=prepared.user_message.channel,
         context_date_from=prepared.context.date_from,
         context_date_to=prepared.context.date_to,
         context_snapshot=snapshot,

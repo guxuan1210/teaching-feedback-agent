@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Callable, Iterator
@@ -8,6 +9,30 @@ from sqlalchemy.orm import Session
 
 from app.chat import service
 from app.chat.providers import ChatProvider
+
+
+class GenerationCoordinator:
+    """Process-wide mutual exclusion for in-flight generations.
+
+    Both the web route and the WeCom handler share one instance so two sends to
+    the same conversation cannot generate concurrently; the loser is rejected
+    before any user message is saved.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active: set[str] = set()
+
+    def try_acquire(self, conversation_id: str) -> bool:
+        with self._lock:
+            if conversation_id in self._active:
+                return False
+            self._active.add(conversation_id)
+            return True
+
+    def release(self, conversation_id: str) -> None:
+        with self._lock:
+            self._active.discard(conversation_id)
 
 
 @dataclass(frozen=True)

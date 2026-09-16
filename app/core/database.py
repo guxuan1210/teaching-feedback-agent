@@ -11,7 +11,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class Base(DeclarativeBase):
@@ -95,6 +95,14 @@ def _add_missing_columns(engine: Engine) -> None:
             conn.exec_driver_sql(
                 "ALTER TABLE wecom_chat_state ADD COLUMN pending_question TEXT"
             )
+        message_cols = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(chat_message)")
+        }
+        if message_cols and "channel" not in message_cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE chat_message ADD COLUMN channel VARCHAR"
+            )
 
 
 def _compose_legacy_parent_message(
@@ -142,6 +150,51 @@ def _backfill_parent_message(engine: Engine) -> None:
         session.commit()
 
 
+def _backfill_teacher_chat_state(engine: Engine) -> None:
+    """Backfill ``teacher_chat_state`` from still-valid wecom conversation state.
+
+    A wecom row's ``conversation_id`` is promoted to the unified current
+    conversation only when the conversation still exists, belongs to the bound
+    teacher, and is active. Anything deleted, foreign, or archived is skipped.
+    """
+    from sqlalchemy import select
+
+    from app.chat.models import ChatConversation, TeacherChatState
+    from app.wecom.models import TeacherWecomBinding, WecomChatState
+
+    factory = build_session_factory(engine)
+    with factory() as session:
+        bindings = {
+            row.wecom_user_id: row.teacher_id
+            for row in session.scalars(select(TeacherWecomBinding))
+        }
+        states = session.scalars(
+            select(WecomChatState).where(WecomChatState.conversation_id.is_not(None))
+        ).all()
+        for state in states:
+            teacher_id = bindings.get(state.wecom_user_id)
+            if teacher_id is None:
+                continue
+            conversation = session.get(ChatConversation, state.conversation_id)
+            if (
+                conversation is None
+                or conversation.owner_teacher_id != teacher_id
+                or conversation.status != "active"
+            ):
+                continue
+            existing = session.get(TeacherChatState, teacher_id)
+            if existing is None:
+                session.add(
+                    TeacherChatState(
+                        teacher_id=teacher_id,
+                        current_conversation_id=conversation.conversation_id,
+                    )
+                )
+            elif existing.current_conversation_id != conversation.conversation_id:
+                existing.current_conversation_id = conversation.conversation_id
+        session.commit()
+
+
 def initialize_database(engine: Engine) -> None:
     """Create all tables and verify/set the schema version pragma."""
     with engine.connect() as conn:
@@ -156,6 +209,7 @@ def initialize_database(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     _add_missing_columns(engine)
     _backfill_parent_message(engine)
+    _backfill_teacher_chat_state(engine)
 
     if current < SCHEMA_VERSION:
         with engine.begin() as conn:

@@ -70,6 +70,7 @@ class ChatMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, default="completed")
     model: Mapped[str | None] = mapped_column(String)
+    channel: Mapped[str | None] = mapped_column(String)
     context_date_from: Mapped[str | None] = mapped_column(String)
     context_date_to: Mapped[str | None] = mapped_column(String)
     context_snapshot: Mapped[str | None] = mapped_column(Text)
@@ -87,7 +88,23 @@ class ChatMessage(Base):
         CheckConstraint(
             "status IN ('completed','failed')", name="ck_chat_message_status"
         ),
+        CheckConstraint(
+            "channel IS NULL OR channel IN ('web','wecom')",
+            name="ck_chat_message_channel",
+        ),
     )
+
+
+class TeacherChatState(Base):
+    __tablename__ = "teacher_chat_state"
+
+    teacher_id: Mapped[str] = mapped_column(
+        String, ForeignKey("teacher.teacher_id", ondelete="CASCADE"), primary_key=True
+    )
+    current_conversation_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("chat_conversation.conversation_id", ondelete="SET NULL")
+    )
+    updated_at: Mapped[str] = mapped_column(String, nullable=False, default=_utcnow)
 
 
 class ChatMessageSource(Base):

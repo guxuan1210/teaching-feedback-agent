@@ -9,6 +9,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Callable
 
+from app.chat.generation import GenerationCoordinator
 from app.wecom.config import WecomConfig
 from app.wecom.handler import BotEvent, process_scope_choice, process_text
 
@@ -53,12 +54,14 @@ class WecomGateway:
         chat_provider,
         binding_secret: str,
         client_factory: Callable[[WecomConfig], object] | None = None,
+        generation_coordinator: GenerationCoordinator | None = None,
     ) -> None:
         self.config = config
         self.session_factory = session_factory
         self.chat_provider = chat_provider
         self.binding_secret = binding_secret
         self.client_factory = client_factory or _default_client_factory
+        self.generation_coordinator = generation_coordinator or GenerationCoordinator()
         self.client = None
         self.connected = False
         self.authenticated = False
@@ -154,6 +157,7 @@ class WecomGateway:
                         (body.get("text") or {}).get("content", ""),
                         chattype=body.get("chattype", "single"),
                         public_base_url=self.config.public_base_url,
+                        coordinator=self.generation_coordinator,
                     )
                     for event in events:
                         asyncio.run_coroutine_threadsafe(queue.put(event), loop).result()
@@ -244,6 +248,7 @@ class WecomGateway:
                             user_id,
                             int(match.group(1)),
                             public_base_url=self.config.public_base_url,
+                            coordinator=self.generation_coordinator,
                         ):
                             asyncio.run_coroutine_threadsafe(
                                 queue.put(result), loop
