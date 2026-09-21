@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import logging
 import re
 
+import aiohttp
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -90,15 +92,56 @@ def parse_media_message(body: dict) -> ParsedMediaMessage:
     return ParsedMediaMessage(message_id, "\n".join(texts), tuple(images))
 
 
-async def download_and_decrypt_images(client, parsed: ParsedMediaMessage) -> list[bytes]:
-    """Fetch/decrypt each SDK media URL in original message order."""
+async def _download_limited(client, url: str, aes_key: str | None, max_bytes: int) -> bytes:
+    """Stream bounded ciphertext, then use the SDK's AES implementation."""
+    from aibot.crypto_utils import decrypt_file
+
+    api_client = getattr(client, "_api_client", None)
+    timeout = getattr(api_client, "_timeout", aiohttp.ClientTimeout(total=30))
+    # The SDK decryptor accepts at most 32 bytes of PKCS#7 padding and may
+    # zero-pad a partial AES block before decrypting.
+    wire_limit = max_bytes if not aes_key else max_bytes + 47
+    chunks: list[bytes] = []
+    size = 0
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url) as response:
+            response.raise_for_status()
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > wire_limit:
+                raise InvalidMediaMessage("media exceeds size limit")
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                size += len(chunk)
+                if size > wire_limit:
+                    raise InvalidMediaMessage("media exceeds size limit")
+                chunks.append(chunk)
+    data = b"".join(chunks)
+    if aes_key:
+        data = decrypt_file(data, aes_key)
+    if len(data) > max_bytes:
+        raise InvalidMediaMessage("media exceeds size limit")
+    return data
+
+
+async def download_and_decrypt_images(
+    client, parsed: ParsedMediaMessage, *, max_bytes: int, max_images: int = 6,
+    downloader=None,
+) -> list[bytes]:
+    """Fetch/decrypt sequentially, enforcing per-message byte and image caps."""
+    if len(parsed.images) > max_images:
+        raise InvalidMediaMessage("too many images in one message")
+    remaining = max_bytes
     payloads = []
+    download = downloader or getattr(client, "download_file_limited", None)
+    if download is None:
+        download = lambda url, key, limit: _download_limited(client, url, key, limit)
     for image in parsed.images:
-        downloaded = await client.download_file(image.url, image.aes_key)
-        payload = downloaded[0] if isinstance(downloaded, tuple) else downloaded
+        payload = await download(image.url, image.aes_key, remaining)
         if not isinstance(payload, bytes):
             raise InvalidMediaMessage("media download returned invalid bytes")
+        if len(payload) > remaining:
+            raise InvalidMediaMessage("media exceeds size limit")
         payloads.append(payload)
+        remaining -= len(payload)
     return payloads
 
 

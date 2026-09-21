@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -9,6 +10,7 @@ from app.family.models import StudentTeacherAssignment, StudentImage, PendingMed
 from app.wecom.config import WecomConfig, load_wecom_config
 from app.wecom.gateway import WecomGateway
 from app.wecom.media_handler import parse_media_message
+from app.wecom.media_handler import download_and_decrypt_images, InvalidMediaMessage
 from app.wecom.models import TeacherWecomBinding
 
 
@@ -18,6 +20,7 @@ IMAGE = b"\xff\xd8\xffteacher-image"
 class FakeClient:
     def __init__(self):
         self.handlers, self.stream_replies, self.cards, self.files, self.messages = {}, [], [], [], []
+        self.download_payload = IMAGE
 
     def on(self, event):
         def register(handler):
@@ -43,6 +46,13 @@ class FakeClient:
     async def download_file(self, url, aes_key=None):
         self.files.append((url, aes_key))
         return IMAGE, "photo.jpg"
+
+    async def download_file_limited(self, url, aes_key, max_bytes):
+        self.files.append((url, aes_key))
+        payload = self.download_payload
+        if len(payload) > max_bytes:
+            raise InvalidMediaMessage("media exceeds size limit")
+        return payload
 
     def disconnect(self):
         pass
@@ -174,3 +184,98 @@ def test_unbound_sender_is_rejected_before_media_download(media_gateway):
     asyncio.run(scenario())
     assert fake.files == []
     assert "绑定老师账号" in fake.stream_replies[-1]
+
+
+@pytest.mark.parametrize("chattype", [None, "group", "invalid"])
+def test_media_requires_explicit_private_chat(media_gateway, chattype):
+    gateway, fake = media_gateway
+
+    async def scenario():
+        await gateway.start()
+        body = {"msgid": "M-CHAT", "from": {"userid": "WX-M"},
+                "msgtype": "image", "image": {"url": "https://media"}}
+        if chattype is not None:
+            body["chattype"] = chattype
+        await fake.handlers["message.image"]({"body": body})
+
+    asyncio.run(scenario())
+    assert fake.files == []
+    assert "仅支持老师私聊" in fake.stream_replies[-1]
+
+
+def test_download_stops_before_aggregate_limit_and_does_not_return_partial_payloads():
+    parsed = parse_media_message({"msgid": "M-LIMIT", "msgtype": "mixed", "mixed": {"msg_item": [
+        {"msgtype": "image", "image": {"url": "u1"}},
+        {"msgtype": "image", "image": {"url": "u2"}},
+    ]}})
+    class BoundedClient:
+        def __init__(self): self.calls = []
+        async def download_file_limited(self, url, aes_key, max_bytes):
+            self.calls.append((url, max_bytes))
+            if url == "u2":
+                raise InvalidMediaMessage("media exceeds size limit")
+            return b"1234"
+    client = BoundedClient()
+    async def run():
+        with pytest.raises(InvalidMediaMessage):
+            await download_and_decrypt_images(client, parsed, max_bytes=6, downloader=client.download_file_limited)
+    asyncio.run(run())
+    assert client.calls == [("u1", 6), ("u2", 2)]
+
+
+def test_download_rejects_too_many_images_before_fetching():
+    parsed = parse_media_message({"msgid": "M-COUNT", "msgtype": "mixed", "mixed": {"msg_item": [
+        *[{"msgtype": "image", "image": {"url": f"u{i}"}} for i in range(7)]
+    ]}})
+    client = FakeClient()
+    async def run():
+        with pytest.raises(InvalidMediaMessage, match="too many"):
+            await download_and_decrypt_images(client, parsed, max_bytes=100, max_images=6)
+    asyncio.run(run())
+    assert client.files == []
+
+
+def test_oversized_download_is_never_archived(media_gateway, db_session):
+    gateway, fake = media_gateway
+    fake.download_payload = b"x" * 32
+    gateway.config = replace(gateway.config, media_max_bytes=16)
+
+    async def scenario():
+        await gateway.start()
+        await fake.handlers["message.image"]({"body": {
+            "msgid": "M-OVERSIZE", "chattype": "single", "from": {"userid": "WX-M"},
+            "msgtype": "image", "image": {"url": "https://media"},
+        }})
+
+    asyncio.run(scenario())
+    assert db_session.query(StudentImage).filter_by(source_message_id="M-OVERSIZE").count() == 0
+    assert not list((gateway.image_store.root).rglob("*.jpg"))
+
+
+def test_streaming_download_stops_on_ciphertext_cap(monkeypatch):
+    import app.wecom.media_handler as media_handler
+
+    class Content:
+        def __init__(self): self.yielded = 0
+        async def iter_chunked(self, _size):
+            for chunk in (b"1234", b"5678", b"later"):
+                self.yielded += len(chunk)
+                yield chunk
+    content = Content()
+    class Response:
+        headers = {}
+        def __init__(self): self.content = content
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): pass
+        def raise_for_status(self): pass
+    class Session:
+        def __init__(self, **_kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): pass
+        def get(self, _url): return Response()
+    monkeypatch.setattr(media_handler.aiohttp, "ClientSession", Session)
+    async def scenario():
+        with pytest.raises(InvalidMediaMessage, match="size limit"):
+            await media_handler._download_limited(object(), "https://media", None, 5)
+    asyncio.run(scenario())
+    assert content.yielded == 8  # Does not read the remaining response after crossing the cap.

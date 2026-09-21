@@ -325,7 +325,7 @@ class WecomGateway:
         user_id = (body.get("from") or {}).get("userid", "")
         if not body.get("msgid") or not user_id:
             return
-        if body.get("chattype", "single") != "single":
+        if body.get("chattype") != "single":
             await self.client.reply_stream(
                 frame, secrets.token_urlsafe(12), "图片归档仅支持老师私聊机器人。", True
             )
@@ -342,7 +342,9 @@ class WecomGateway:
                         "请先登录 Teaching Agent 并绑定老师账号。", True,
                     )
                     return
-                payloads = await download_and_decrypt_images(self.client, parsed)
+                payloads = await download_and_decrypt_images(
+                    self.client, parsed, max_bytes=self.config.media_max_bytes
+                )
 
                 def archive():
                     with self.session_factory() as db:
