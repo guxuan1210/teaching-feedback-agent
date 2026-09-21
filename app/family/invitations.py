@@ -153,6 +153,24 @@ def redeem_guardian_invitation(
     )
 
 
+def redeem_guardian_invitation_by_id(
+    db: Session,
+    invitation_id: str,
+    external_user_id: str,
+    relationship: str,
+    guardian_name: str,
+    *,
+    secret_key: str,
+    now: datetime | None = None,
+) -> Guardian:
+    """Redeem a previously identified invitation without retaining its code."""
+    return _redeem_guardian_invitation(
+        db, "", external_user_id, relationship, guardian_name,
+        secret_key=secret_key, now=now, retry_on_conflict=True,
+        invitation_id=invitation_id,
+    )
+
+
 def _redeem_guardian_invitation(
     db: Session,
     code: str,
@@ -163,13 +181,15 @@ def _redeem_guardian_invitation(
     secret_key: str,
     now: datetime | None,
     retry_on_conflict: bool,
+    invitation_id: str | None = None,
 ) -> Guardian:
     secret = _require_secret(secret_key)
     normalized = _normalized_code(code)
-    if not normalized:
-        raise ValueError("邀请码不能为空")
-    if len(normalized) != 8 or any(char not in CODE_ALPHABET for char in normalized):
-        raise ValueError("邀请码无效")
+    if invitation_id is None:
+        if not normalized:
+            raise ValueError("邀请码不能为空")
+        if len(normalized) != 8 or any(char not in CODE_ALPHABET for char in normalized):
+            raise ValueError("邀请码无效")
     external_id = (external_user_id or "").strip()
     if not external_id:
         raise ValueError("外部用户标识不能为空")
@@ -180,12 +200,13 @@ def _redeem_guardian_invitation(
     if relation_type is None:
         raise ValueError("监护人关系无效")
     current = _utc_datetime(now or _now())
-    code_hash = _digest(normalized, secret)
-    invitation = db.scalar(
+    code_hash = _digest(normalized, secret) if invitation_id is None else None
+    invitation = db.get(GuardianInvitation, invitation_id) if invitation_id else db.scalar(
         select(GuardianInvitation).where(GuardianInvitation.code_hash == code_hash)
     )
     if invitation is None:
         raise ValueError("邀请码无效")
+    code_hash = invitation.code_hash
     if invitation.revoked_at is not None:
         raise ValueError("邀请码已撤销")
     if _stored_utc(invitation.expires_at) <= current:
@@ -269,6 +290,7 @@ def _redeem_guardian_invitation(
             return _redeem_guardian_invitation(
                 db, code, external_user_id, relationship, guardian_name,
                 secret_key=secret_key, now=current, retry_on_conflict=False,
+                invitation_id=invitation_id,
             )
         raise ValueError("监护人绑定发生并发冲突，请重试") from exc
 
@@ -294,6 +316,7 @@ def _redeem_guardian_invitation(
             return _redeem_guardian_invitation(
                 db, code, external_user_id, relationship, guardian_name,
                 secret_key=secret_key, now=current, retry_on_conflict=False,
+                invitation_id=invitation_id,
             )
         raise ValueError("监护人绑定发生并发冲突，请重试") from exc
     db.refresh(invitation)
