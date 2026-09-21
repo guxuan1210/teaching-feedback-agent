@@ -1,6 +1,7 @@
 """Web access control for family relationships and student images."""
 
-from datetime import date
+from datetime import date, timedelta
+import base64
 from sqlalchemy import select
 
 from app.catalog.models import Student, Teacher
@@ -38,6 +39,31 @@ def _foreign_image(teacher_client, tmp_path):
     return store
 
 
+def _seed_listing_images(client, student_id, uploader_id, count, deleted=()):
+    with client.app.state.session_factory() as db:
+        if db.get(Student, student_id) is None:
+            db.add(Student(student_id=student_id, name="测试学生", grade="三年级", status="active"))
+            db.flush()
+        if student_id == "S-OWNED":
+            db.add(StudentTeacherAssignment(assignment_id="STA-LIST", student_id=student_id, teacher_id=uploader_id, role="primary", start_date="2026-01-01", status="active", origin="manual"))
+        for index in range(count):
+            is_deleted = index in deleted
+            image_id = f"IMG-LIST-{student_id}-{index:03d}"
+            db.add(StudentImage(
+                image_id=image_id, student_id=student_id,
+                uploaded_by_teacher_id=uploader_id,
+                source_message_id=f"msg-list-{student_id}-{index:03d}", source_position=0,
+                mime_type="image/png", extension="png", byte_size=len(PNG),
+                sha256="a" * 64, storage_path=f"{student_id}/2026/09/{image_id}.png",
+                uploaded_at=f"{date(2026, 9, 1) + timedelta(days=index)}T10:00:00+00:00",
+                status="deleted" if is_deleted else "active",
+                deleted_at="2026-09-22T12:00:00+00:00" if is_deleted else None,
+                deleted_by_teacher_id="ADMIN" if is_deleted else None,
+                quarantine_path=f"deleted-{index}.png" if is_deleted else None,
+            ))
+        db.commit()
+
+
 def test_teacher_can_view_owned_student_image(teacher_client, tmp_path):
     _owned_image(teacher_client, tmp_path)
     response = teacher_client.get("/family/images/IMG-OWNED")
@@ -72,13 +98,21 @@ def test_image_route_requires_login(database_url):
 def test_admin_can_create_invitation_and_plain_code_is_shown_once(client, student):
     response = client.post(f"/family/students/{student.student_id}/invitations", follow_redirects=False)
     assert response.status_code == 303
+    signed_cookie = client.cookies.get("teaching_session")
+    cookie_payload = base64.urlsafe_b64decode(signed_cookie.split(".", 1)[0] + "===").decode("utf-8")
+    assert "new_guardian_invitation_nonce" in cookie_payload
+    assert '"code":' not in cookie_payload
     page = client.get(response.headers["location"])
     assert page.status_code == 200
     assert "请立即复制" in page.text
     assert "明文" not in page.text
     code = page.text.split('class="invitation-code">', 1)[1].split("</strong>", 1)[0]
     assert len(code) == 8
+    assert code not in cookie_payload
     assert code not in client.get(response.headers["location"]).text
+    client.cookies.set("teaching_session", signed_cookie)
+    replay = client.get(response.headers["location"])
+    assert code not in replay.text
     with client.app.state.session_factory() as db:
         invitation = db.scalar(select(GuardianInvitation))
         assert invitation is not None
@@ -106,7 +140,42 @@ def test_student_management_page_scopes_teacher_images(teacher_client, tmp_path)
     response = teacher_client.get("/family/students/S-OWNED")
     assert response.status_code == 200
     assert "/family/images/IMG-OWNED" in response.text
+    assert "普通老师" in response.text
     assert "家长关系管理" not in response.text
+
+
+def test_family_image_list_filters_dates_and_paginates(teacher_client):
+    _seed_listing_images(teacher_client, "S-OWNED", "T-OTHER", 26)
+    filtered = teacher_client.get("/family/students/S-OWNED?date_from=2026-09-25&date_to=2026-09-25")
+    assert filtered.status_code == 200
+    assert 'IMG-LIST-S-OWNED-024' in filtered.text
+    assert 'IMG-LIST-S-OWNED-023' not in filtered.text
+    page1 = teacher_client.get("/family/students/S-OWNED?date_from=2026-09-01&date_to=2026-09-26")
+    assert page1.status_code == 200
+    assert page1.text.count('class="student-image-card ') == 24
+    assert 'href="/family/students/S-OWNED?date_from=2026-09-01&amp;date_to=2026-09-26&amp;page=2"' in page1.text
+    page2 = teacher_client.get("/family/students/S-OWNED?date_from=2026-09-01&date_to=2026-09-26&page=2")
+    assert page2.text.count('class="student-image-card ') == 2
+    assert "普通老师" in page2.text
+
+
+def test_family_image_list_rejects_unbounded_page_numbers(teacher_client):
+    _seed_listing_images(teacher_client, "S-OWNED", "T-OTHER", 0)
+    response = teacher_client.get("/family/students/S-OWNED?page=4168")
+    assert response.status_code == 422
+    assert teacher_client.get("/family/students/S-OWNED?page=2").status_code == 422
+
+
+def test_family_teacher_sees_only_active_images_and_admin_can_include_deleted(client, teacher_client):
+    _seed_listing_images(teacher_client, "S-OWNED", "T-OTHER", 2, deleted=(1,))
+    teacher_page = teacher_client.get("/family/students/S-OWNED")
+    assert teacher_page.text.count('class="student-image-card ') == 1
+
+    _seed_listing_images(client, "S1", "ADMIN", 2, deleted=(1,))
+    admin_page = client.get("/family/students/S1")
+    assert admin_page.text.count('class="student-image-card ') == 2
+    assert "图片已删除" in admin_page.text
+    assert "管理员" in admin_page.text
 
 
 def test_teacher_cannot_manage_unassigned_student(teacher_client, tmp_path):

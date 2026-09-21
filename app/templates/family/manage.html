@@ -65,13 +65,20 @@
 
 <section class="family-images">
   <h2>学生图片</h2>
+  <form method="get" action="/family/students/{{ student.student_id }}" class="image-filter-form">
+    <label>上传开始日期<input type="date" name="date_from" value="{{ image_date_from }}"></label>
+    <label>上传结束日期<input type="date" name="date_to" value="{{ image_date_to }}"></label>
+    <button type="submit">筛选图片</button>
+    {% if image_date_from or image_date_to %}<a href="/family/students/{{ student.student_id }}">清除筛选</a>{% endif %}
+  </form>
+  <p class="muted">共 {{ image_total }} 张图片 · 第 {{ image_page }}/{{ image_page_count }} 页</p>
   {% if images %}
   <div class="student-image-grid">
     {% for image in images %}
     <article class="student-image-card {% if image.status == 'deleted' %}is-deleted{% endif %}">
       {% if image.status == 'active' %}<img src="/family/images/{{ image.image_id }}" alt="{{ student.name }}的图片" loading="lazy">
       {% else %}<div class="image-placeholder">图片已删除</div>{% endif %}
-      <div class="student-image-meta"><span>{{ image.uploaded_at[:10] }}</span>{% if image.caption %}<p>{{ image.caption }}</p>{% endif %}</div>
+      <div class="student-image-meta"><span>{{ image.uploaded_at[:10] }} · 上传者：{{ image_uploader_names.get(image.uploaded_by_teacher_id, image.uploaded_by_teacher_id) }}</span>{% if image.caption %}<p>{{ image.caption }}</p>{% endif %}</div>
       {% if is_admin %}
         {% if image.status == 'active' %}<form method="post" action="/family/images/{{ image.image_id }}/delete"><button class="button-secondary" type="submit">删除</button></form>
         {% else %}<form method="post" action="/family/images/{{ image.image_id }}/restore"><button class="button-secondary" type="submit">恢复</button></form>{% endif %}
@@ -80,5 +87,12 @@
     {% endfor %}
   </div>
   {% else %}<p class="muted">暂无已归档图片。</p>{% endif %}
+  {% if image_previous_url or image_next_url %}
+  <nav class="image-pagination" aria-label="学生图片分页">
+    {% if image_previous_url %}<a href="{{ image_previous_url }}">上一页</a>{% endif %}
+    <span>第 {{ image_page }}/{{ image_page_count }} 页</span>
+    {% if image_next_url %}<a href="{{ image_next_url }}">下一页</a>{% endif %}
+  </nav>
+  {% endif %}
 </section>
 {% endblock %}

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -12,7 +12,7 @@ import re
 import tempfile
 from typing import Literal, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.catalog.models import Student, Teacher
@@ -23,6 +23,9 @@ from app.family.permissions import teacher_can_access_student
 from app.family.storage import ImageStorageError, ImageTooLarge, LocalImageStore, UnsupportedImage
 
 PENDING_MINUTES = 15
+IMAGE_PAGE_SIZE = 24
+MAX_IMAGE_PAGE_SIZE = 100
+MAX_IMAGE_OFFSET = 100_000
 _SAFE_MESSAGE = re.compile(r"[A-Za-z0-9_-]{1,160}\Z")
 
 
@@ -233,11 +236,109 @@ def expire_pending_media(db: Session, store: LocalImageStore, *, now: datetime |
     return count
 
 
-def list_student_images(db: Session, student_id: str, *, include_deleted: bool = False, limit: int = 50, offset: int = 0) -> list[StudentImage]:
-    if limit < 1 or offset < 0: raise ValueError("invalid pagination")
+def _image_query(
+    student_id: str,
+    *,
+    include_deleted: bool,
+    date_from: date | None,
+    date_to: date | None,
+):
+    if date_from is not None and (
+        isinstance(date_from, datetime) or not isinstance(date_from, date)
+    ):
+        raise ValueError("invalid image start date")
+    if date_to is not None and (
+        isinstance(date_to, datetime) or not isinstance(date_to, date)
+    ):
+        raise ValueError("invalid image end date")
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise ValueError("image start date must not follow end date")
+
     stmt = select(StudentImage).where(StudentImage.student_id == student_id)
-    if not include_deleted: stmt = stmt.where(StudentImage.status == "active")
-    return list(db.scalars(stmt.order_by(StudentImage.uploaded_at.desc(), StudentImage.source_position).limit(limit).offset(offset)))
+    if not include_deleted:
+        stmt = stmt.where(StudentImage.status == "active")
+    if date_from is not None:
+        stmt = stmt.where(StudentImage.uploaded_at >= date_from.isoformat())
+    if date_to is not None and date_to < date.max:
+        stmt = stmt.where(
+            StudentImage.uploaded_at < (date_to + timedelta(days=1)).isoformat()
+        )
+    return stmt
+
+
+def _validate_image_pagination(limit: int, offset: int) -> None:
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or limit < 1
+        or limit > MAX_IMAGE_PAGE_SIZE
+        or isinstance(offset, bool)
+        or not isinstance(offset, int)
+        or offset < 0
+        or offset > MAX_IMAGE_OFFSET
+    ):
+        raise ValueError("invalid pagination")
+
+
+def list_student_images(
+    db: Session,
+    student_id: str,
+    *,
+    include_deleted: bool = False,
+    limit: int = IMAGE_PAGE_SIZE,
+    offset: int = 0,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[StudentImage]:
+    _validate_image_pagination(limit, offset)
+    stmt = _image_query(
+        student_id,
+        include_deleted=include_deleted,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return list(
+        db.scalars(
+            stmt.order_by(
+                StudentImage.uploaded_at.desc(),
+                StudentImage.source_position,
+                StudentImage.image_id,
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+
+
+def count_student_images(
+    db: Session,
+    student_id: str,
+    *,
+    include_deleted: bool = False,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> int:
+    stmt = _image_query(
+        student_id,
+        include_deleted=include_deleted,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+
+
+def image_uploader_names(db: Session, images: list[StudentImage]) -> dict[str, str]:
+    uploader_ids = {image.uploaded_by_teacher_id for image in images}
+    if not uploader_ids:
+        return {}
+    return {
+        teacher_id: name
+        for teacher_id, name in db.execute(
+            select(Teacher.teacher_id, Teacher.name).where(
+                Teacher.teacher_id.in_(uploader_ids)
+            )
+        )
+    }
 
 
 def _admin(db, actor):

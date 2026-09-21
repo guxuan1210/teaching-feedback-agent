@@ -1552,3 +1552,24 @@ legend {
 .muted {
   color: #667085;
 }
+
+.image-filter-form,
+.image-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+  margin: 0.8rem 0;
+}
+
+.image-pagination {
+  align-items: center;
+  justify-content: center;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border, #d9e0e8);
+}
+
+.student-image-meta span,
+.student-image-card > span {
+  overflow-wrap: anywhere;
+}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
@@ -207,3 +207,30 @@ def test_listing_validates_pagination(media_env):
         list_student_images(db, "S1", limit=0)
     with pytest.raises(ValueError):
         list_student_images(db, "S1", offset=-1)
+
+
+def test_image_listing_filters_upload_date_and_uses_bounded_pages(media_env):
+    db, store, *_ = media_env
+    result = archive(db, store, "S1", (PNG, PNG, PNG), "MSG-date-filter")
+    images = list(db.scalars(select(StudentImage).where(StudentImage.source_message_id == "MSG-date-filter").order_by(StudentImage.source_position)))
+    images[0].uploaded_at = "2026-09-20T10:00:00+00:00"
+    images[1].uploaded_at = "2026-09-21T11:00:00+00:00"
+    images[2].uploaded_at = "2026-09-22T12:00:00+00:00"
+    db.commit()
+
+    filtered = list_student_images(
+        db, "S1", date_from=date(2026, 9, 21), date_to=date(2026, 9, 22), limit=1
+    )
+    next_page = list_student_images(
+        db, "S1", date_from=date(2026, 9, 21), date_to=date(2026, 9, 22), limit=1, offset=1
+    )
+    assert [row.image_id for row in filtered] == [images[2].image_id]
+    assert [row.image_id for row in next_page] == [images[1].image_id]
+
+
+def test_image_listing_rejects_unbounded_page_size_and_offset(media_env):
+    db, *_ = media_env
+    with pytest.raises(ValueError):
+        list_student_images(db, "S1", limit=101)
+    with pytest.raises(ValueError):
+        list_student_images(db, "S1", offset=100_001)

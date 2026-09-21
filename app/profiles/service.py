@@ -9,6 +9,7 @@ high-frequency indicators, recent notes, and a traceable source list.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from app.feedback.models import (
     SpecialFeedbackIndicator,
 )
 from app.sessions.models import ClassSession
+from app.family import media as family_media
 from app.family.models import Guardian, StudentGuardian, StudentImage, StudentTeacherAssignment
 
 
@@ -63,6 +65,8 @@ class StudentProfile:
     guardians: list[Guardian]
     teacher_assignments: list[StudentTeacherAssignment]
     teacher_names: dict[str, str]
+    image_total: int
+    image_uploader_names: dict[str, str]
 
 
 _DAILY_TREND_ATTRS = (
@@ -112,6 +116,11 @@ def build_student_profile(
     date_from: str,
     date_to: str,
     include_family: bool = False,
+    include_deleted_images: bool = False,
+    image_date_from: date | None = None,
+    image_date_to: date | None = None,
+    image_limit: int = family_media.IMAGE_PAGE_SIZE,
+    image_offset: int = 0,
 ) -> StudentProfile:
     student = db.get(Student, student_id)
     if student is None:
@@ -235,12 +244,23 @@ def build_student_profile(
         if feedback.note and feedback.note.strip()
     ][:10]
 
-    images = list(db.scalars(
-        select(StudentImage)
-        .where(StudentImage.student_id == student_id, StudentImage.status == "active")
-        .order_by(StudentImage.uploaded_at.desc(), StudentImage.source_position)
-        .limit(24)
-    ))
+    images = family_media.list_student_images(
+        db,
+        student_id,
+        include_deleted=include_deleted_images,
+        limit=image_limit,
+        offset=image_offset,
+        date_from=image_date_from,
+        date_to=image_date_to,
+    )
+    image_total = family_media.count_student_images(
+        db,
+        student_id,
+        include_deleted=include_deleted_images,
+        date_from=image_date_from,
+        date_to=image_date_to,
+    )
+    image_uploader_names = family_media.image_uploader_names(db, images)
     guardians: list[Guardian] = []
     teacher_assignments: list[StudentTeacherAssignment] = []
     teacher_names: dict[str, str] = {}
@@ -277,4 +297,6 @@ def build_student_profile(
         guardians=guardians,
         teacher_assignments=teacher_assignments,
         teacher_names=teacher_names,
+        image_total=image_total,
+        image_uploader_names=image_uploader_names,
     )

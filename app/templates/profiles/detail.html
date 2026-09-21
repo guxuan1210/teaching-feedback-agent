@@ -45,16 +45,35 @@
 </table>
 
 <h2>学生图片</h2>
+<form method="get" action="/profiles/{{ profile.student.student_id }}" class="image-filter-form">
+  <input type="hidden" name="class_id" value="{{ class_id }}">
+  <input type="hidden" name="date_from" value="{{ date_from }}">
+  <input type="hidden" name="date_to" value="{{ date_to }}">
+  <label>上传开始日期<input type="date" name="image_date_from" value="{{ image_date_from }}"></label>
+  <label>上传结束日期<input type="date" name="image_date_to" value="{{ image_date_to }}"></label>
+  <button type="submit">筛选图片</button>
+  {% if image_date_from or image_date_to %}<a href="/profiles/{{ profile.student.student_id }}?class_id={{ class_id }}&amp;date_from={{ date_from }}&amp;date_to={{ date_to }}">清除筛选</a>{% endif %}
+</form>
+<p class="muted">共 {{ image_total }} 张图片 · 第 {{ image_page }}/{{ image_page_count }} 页</p>
 {% if profile.images %}
   <div class="student-image-grid">
     {% for image in profile.images %}
-      <a class="student-image-card" href="/family/images/{{ image.image_id }}" target="_blank" rel="noopener">
-        <img src="/family/images/{{ image.image_id }}" alt="{{ profile.student.name }}的图片" loading="lazy">
-        <span>{{ image.uploaded_at[:10] }}{% if image.caption %} · {{ image.caption }}{% endif %}</span>
-      </a>
+      <article class="student-image-card {% if image.status == 'deleted' %}is-deleted{% endif %}">
+        {% if image.status == 'active' %}<a href="/family/images/{{ image.image_id }}" target="_blank" rel="noopener">
+          <img src="/family/images/{{ image.image_id }}" alt="{{ profile.student.name }}的图片" loading="lazy">
+        </a>{% else %}<div class="image-placeholder">图片已删除</div>{% endif %}
+        <span>{{ image.uploaded_at[:10] }} · 上传者：{{ profile.image_uploader_names.get(image.uploaded_by_teacher_id, image.uploaded_by_teacher_id) }}{% if image.caption %} · {{ image.caption }}{% endif %}</span>
+      </article>
     {% endfor %}
   </div>
 {% else %}<p class="muted">暂无已归档图片。</p>{% endif %}
+{% if image_previous_url or image_next_url %}
+<nav class="image-pagination" aria-label="学生图片分页">
+  {% if image_previous_url %}<a href="{{ image_previous_url }}">上一页</a>{% endif %}
+  <span>第 {{ image_page }}/{{ image_page_count }} 页</span>
+  {% if image_next_url %}<a href="{{ image_next_url }}">下一页</a>{% endif %}
+</nav>
+{% endif %}
 
 {% if is_admin %}
 <section class="family-management">

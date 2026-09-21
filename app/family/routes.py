@@ -5,6 +5,10 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 import re
+import secrets
+from threading import Lock
+import time
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -31,8 +35,11 @@ from app.family.storage import ImageStorageError, LocalImageStore
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 router = APIRouter(prefix="/family", tags=["family"])
-PAGE_SIZE = 24
+PAGE_SIZE = media.IMAGE_PAGE_SIZE
+MAX_PAGE = media.MAX_IMAGE_OFFSET // PAGE_SIZE + 1
 _SAFE_IMAGE_ID = re.compile(r"[A-Za-z0-9_-]{1,120}\Z")
+_NOTICE_CACHE_INIT_LOCK = Lock()
+_NOTICE_TTL_SECONDS = 300
 
 
 def get_image_store(request: Request) -> LocalImageStore:
@@ -68,6 +75,74 @@ def _redirect_student(student_id: str) -> RedirectResponse:
     return RedirectResponse(f"/family/students/{student_id}", status_code=303)
 
 
+def _notice_cache(request: Request) -> tuple[dict, Lock]:
+    cache = getattr(request.app.state, "guardian_invitation_notice_cache", None)
+    lock = getattr(request.app.state, "guardian_invitation_notice_lock", None)
+    if cache is None or lock is None:
+        with _NOTICE_CACHE_INIT_LOCK:
+            cache = getattr(request.app.state, "guardian_invitation_notice_cache", None)
+            lock = getattr(request.app.state, "guardian_invitation_notice_lock", None)
+            if cache is None:
+                cache = {}
+                request.app.state.guardian_invitation_notice_cache = cache
+            if lock is None:
+                lock = Lock()
+                request.app.state.guardian_invitation_notice_lock = lock
+    return cache, lock
+
+
+def _store_invitation_notice(request: Request, *, nonce: str, notice: dict) -> None:
+    cache, lock = _notice_cache(request)
+    now = time.monotonic()
+    with lock:
+        for key, value in list(cache.items()):
+            if value["expires_at"] <= now:
+                cache.pop(key, None)
+        cache[nonce] = {**notice, "expires_at": now + _NOTICE_TTL_SECONDS}
+
+
+def _consume_invitation_notice(request: Request, nonce: str | None, student_id: str):
+    if not nonce:
+        return None
+    cache, lock = _notice_cache(request)
+    with lock:
+        notice = cache.pop(nonce, None)
+    if (
+        notice is None
+        or notice["expires_at"] <= time.monotonic()
+        or notice["student_id"] != student_id
+    ):
+        return None
+    return notice
+
+
+def _date_filter(value: str | None, field: str) -> date | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"{field} 日期格式无效") from exc
+    if parsed.isoformat() != value:
+        raise HTTPException(status_code=422, detail=f"{field} 日期格式无效")
+    return parsed
+
+
+def _image_page(request: Request) -> int:
+    value = request.query_params.get("page", "1")
+    if not value.isdecimal() or len(value) > len(str(MAX_PAGE)):
+        raise HTTPException(status_code=422, detail="图片页码无效")
+    page = int(value)
+    if page < 1 or page > MAX_PAGE:
+        raise HTTPException(status_code=422, detail="图片页码超出范围")
+    return page
+
+
+def _page_url(path: str, *, date_from: str | None, date_to: str | None, page: int) -> str:
+    params = {"date_from": date_from or "", "date_to": date_to or "", "page": str(page)}
+    return f"{path}?{urlencode(params)}"
+
+
 @router.get("/students/{student_id}", response_class=HTMLResponse)
 def student_family_page(
     request: Request,
@@ -77,9 +152,23 @@ def student_family_page(
 ):
     student = _require_student_access(db, teacher, student_id)
     admin = is_admin(teacher)
-    images = media.list_student_images(
-        db, student_id, include_deleted=admin, limit=PAGE_SIZE, offset=0
+    date_from = _date_filter(request.query_params.get("date_from"), "开始")
+    date_to = _date_filter(request.query_params.get("date_to"), "结束")
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+    page = _image_page(request)
+    offset = (page - 1) * PAGE_SIZE
+    image_total = media.count_student_images(
+        db, student_id, include_deleted=admin, date_from=date_from, date_to=date_to
     )
+    page_count = max(1, (image_total + PAGE_SIZE - 1) // PAGE_SIZE)
+    if page > page_count:
+        raise HTTPException(status_code=422, detail="图片页码超出当前筛选范围")
+    images = media.list_student_images(
+        db, student_id, include_deleted=admin, limit=PAGE_SIZE, offset=offset,
+        date_from=date_from, date_to=date_to,
+    )
+    image_uploader_names = media.image_uploader_names(db, images)
     guardians = []
     assignments = []
     invitation_rows = []
@@ -110,15 +199,23 @@ def student_family_page(
             .where(FamilyConversation.student_id == student_id)
             .order_by(FamilyConversation.last_message_at.desc())
         ))
-    one_time_invitation = request.session.pop("new_guardian_invitation", None)
-    if one_time_invitation and one_time_invitation["student_id"] != student_id:
-        one_time_invitation = None
+    nonce = request.session.pop("new_guardian_invitation_nonce", None)
+    one_time_invitation = _consume_invitation_notice(request, nonce, student_id)
+    page_base = f"/family/students/{student_id}"
     return templates.TemplateResponse(
         request,
         "family/manage.html",
         {
             "student": student,
             "images": images,
+            "image_uploader_names": image_uploader_names,
+            "image_total": image_total,
+            "image_page": page,
+            "image_page_count": page_count,
+            "image_date_from": date_from.isoformat() if date_from else "",
+            "image_date_to": date_to.isoformat() if date_to else "",
+            "image_previous_url": _page_url(page_base, date_from=date_from.isoformat() if date_from else None, date_to=date_to.isoformat() if date_to else None, page=page - 1) if page > 1 else None,
+            "image_next_url": _page_url(page_base, date_from=date_from.isoformat() if date_from else None, date_to=date_to.isoformat() if date_to else None, page=page + 1) if page < page_count else None,
             "guardians": guardians,
             "assignments": assignments,
             "invitations": invitation_rows,
@@ -184,11 +281,13 @@ def create_invitation(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    request.session["new_guardian_invitation"] = {
+    nonce = secrets.token_urlsafe(32)
+    _store_invitation_notice(request, nonce=nonce, notice={
         "student_id": student_id,
         "invitation_id": invitation.invitation_id,
         "code": code,
-    }
+    })
+    request.session["new_guardian_invitation_nonce"] = nonce
     return _redirect_student(student_id)
 
 
