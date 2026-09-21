@@ -169,7 +169,10 @@ def redeem_guardian_invitation(
         if guardian is None or guardian.status != "active":
             db.rollback()
             raise ValueError("已有监护人绑定无效")
-        if guardian.relationship_type != relation_type:
+        if (
+            guardian.relationship_type != relation_type
+            or guardian.name.strip() != name
+        ):
             db.rollback()
             raise ValueError("已有监护人身份与本次信息冲突")
     else:

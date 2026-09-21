@@ -174,6 +174,40 @@ def test_existing_binding_rejects_conflicting_identity(db_session):
     assert second_invitation.used_count == 0
 
 
+def test_existing_binding_rejects_name_conflict_without_mutation(db_session):
+    _scope(db_session)
+    guardian = Guardian(name="王先生", relationship_type="father", status="active")
+    db_session.add(guardian)
+    db_session.commit()
+    binding = GuardianChannelBinding(
+        channel="wecom_customer", external_user_id="WX-NAME-CONFLICT",
+        guardian_id=guardian.guardian_id, active_student_id=None,
+        pending_state_json='{"step":"invite"}', status="active",
+    )
+    db_session.add(binding)
+    db_session.commit()
+    invitation, code = create_guardian_invitation(
+        db_session, "S1", "T1", secret_key=SECRET, now=NOW
+    )
+
+    with pytest.raises(ValueError, match="身份.*冲突"):
+        redeem_guardian_invitation(
+            db_session, code, "WX-NAME-CONFLICT", "father", " 李先生 ",
+            secret_key=SECRET, now=NOW,
+        )
+
+    db_session.refresh(invitation)
+    db_session.refresh(binding)
+    db_session.refresh(guardian)
+    assert invitation.used_count == 0
+    assert guardian.name == "王先生"
+    assert binding.guardian_id == guardian.guardian_id
+    assert binding.active_student_id is None
+    assert binding.pending_state_json == '{"step":"invite"}'
+    assert binding.status == "active"
+    assert db_session.query(StudentGuardian).count() == 0
+
+
 def test_revoked_binding_reuses_guardian_and_rejects_identity_conflict(db_session):
     _scope(db_session)
     guardian = Guardian(name="王先生", relationship_type="father", status="active")
