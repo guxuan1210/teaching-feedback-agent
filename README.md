@@ -128,7 +128,7 @@ pytest -q
 
 ## 安全备份
 
-在应用停止运行后，直接复制 `data/teaching_demo.db` 即可完成备份；不要在应用运行期间拷贝（WAL 模式下可能有未合并的日志）。
+在应用停止运行后，同时复制 `data/teaching_demo.db` 和 `data/student_media` 才是完整备份；不要在应用运行期间拷贝（WAL 模式下可能有未合并的日志）。如果通过 `STUDENT_MEDIA_ROOT` 修改了图片目录，也要备份该目录。
 
 ## 登录与权限
 
