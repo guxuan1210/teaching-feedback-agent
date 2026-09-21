@@ -44,6 +44,31 @@
   </tbody>
 </table>
 
+<h2>学生图片</h2>
+{% if profile.images %}
+  <div class="student-image-grid">
+    {% for image in profile.images %}
+      <a class="student-image-card" href="/family/images/{{ image.image_id }}" target="_blank" rel="noopener">
+        <img src="/family/images/{{ image.image_id }}" alt="{{ profile.student.name }}的图片" loading="lazy">
+        <span>{{ image.uploaded_at[:10] }}{% if image.caption %} · {{ image.caption }}{% endif %}</span>
+      </a>
+    {% endfor %}
+  </div>
+{% else %}<p class="muted">暂无已归档图片。</p>{% endif %}
+
+{% if is_admin %}
+<section class="family-management">
+  <h2>家长与教师关系</h2>
+  {% if profile.guardians %}
+    <p>家长：{% for guardian in profile.guardians %}{{ guardian.name }}（{{ {'father': '父亲', 'mother': '母亲', 'other': '其他'}[guardian.relationship_type] }}）{% if not loop.last %}、{% endif %}{% endfor %}</p>
+  {% else %}<p class="muted">尚未绑定家长。</p>{% endif %}
+  {% if profile.teacher_assignments %}
+    <ul>{% for assignment in profile.teacher_assignments %}<li>{{ profile.teacher_names.get(assignment.teacher_id, assignment.teacher_id) }} · {{ {'primary': '主责教师', 'subject': '科任教师', 'collaborator': '协作教师'}[assignment.role] }} · {{ assignment.start_date }} — {{ assignment.end_date or '至今' }}{% if assignment.status != 'active' %}（已撤销）{% endif %}</li>{% endfor %}</ul>
+  {% else %}<p class="muted">暂无教师关系。</p>{% endif %}
+  <p><a href="/family/students/{{ profile.student.student_id }}">管理家长邀请码与关系</a></p>
+</section>
+{% endif %}
+
 <h2>晚辅评分趋势</h2>
 {% if profile.daily_trends %}
 <table class="trend-table">

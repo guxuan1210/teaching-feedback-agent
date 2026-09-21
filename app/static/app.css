@@ -1452,3 +1452,103 @@ legend {
     padding: 0.65rem 0.75rem;
   }
 }
+
+.family-management,
+.family-images,
+.family-callout {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid var(--border, #d9e0e8);
+  border-radius: 0.75rem;
+  background: var(--surface, #fff);
+}
+
+.family-callout {
+  border-color: #8bb8e8;
+  background: #f1f7ff;
+}
+
+.invitation-code {
+  display: inline-block;
+  padding: 0.35rem 0.65rem;
+  border-radius: 0.35rem;
+  background: #fff;
+  font-size: 1.35rem;
+  letter-spacing: 0.16em;
+}
+
+.family-assignment-form,
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+  margin: 0.8rem 0;
+}
+
+.student-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.8rem;
+  margin: 0.8rem 0;
+}
+
+.student-image-card {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--border, #d9e0e8);
+  border-radius: 0.6rem;
+  color: inherit;
+  text-decoration: none;
+  background: #fff;
+}
+
+.student-image-card img,
+.image-placeholder {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #f2f4f7;
+}
+
+.student-image-meta,
+.student-image-card > span {
+  display: block;
+  padding: 0.55rem;
+  font-size: 0.88rem;
+}
+
+.student-image-card.is-deleted {
+  opacity: 0.72;
+}
+
+.image-placeholder {
+  display: grid;
+  place-items: center;
+  color: #667085;
+}
+
+.family-message-list {
+  display: grid;
+  gap: 0.75rem;
+  padding-left: 1.5rem;
+}
+
+.family-message {
+  padding: 0.9rem;
+  border: 1px solid var(--border, #d9e0e8);
+  border-radius: 0.6rem;
+  list-style: none;
+}
+
+.family-message-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.family-message-heading time,
+.muted {
+  color: #667085;
+}

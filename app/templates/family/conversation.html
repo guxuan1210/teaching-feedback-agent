@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}家校沟通记录{% endblock %}
+{% block content %}
+<h1>家校沟通记录</h1>
+<p>学生：{{ conversation.student_id }} · 家长：{{ conversation.guardian_id }} · 状态：{{ conversation.status }}</p>
+<ol class="family-message-list">
+  {% for message in messages %}
+    <li class="family-message">
+      <div class="family-message-heading">
+        <strong>{% if message.sender_type == 'bot' %}机器人{% elif message.sender_type == 'teacher' %}老师{% else %}家长{% endif %}</strong>
+        <time>{{ message.created_at }}</time>
+      </div>
+      <p>{{ message.content }}</p>
+      {% if message.image_id %}<a href="/family/images/{{ message.image_id }}">查看图片</a>{% endif %}
+      {% if message.status == 'failed' %}<p class="muted">发送失败：{{ message.failure_reason }}</p>{% endif %}
+    </li>
+  {% else %}<li class="muted">暂无消息。</li>{% endfor %}
+</ol>
+{% endblock %}

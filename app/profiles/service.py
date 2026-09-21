@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.catalog.models import Class, Enrollment, Student
+from app.catalog.models import Class, Enrollment, Student, Teacher
 from app.feedback.models import (
     DailyFeedback,
     DailyFeedbackIndicator,
@@ -22,6 +22,7 @@ from app.feedback.models import (
     SpecialFeedbackIndicator,
 )
 from app.sessions.models import ClassSession
+from app.family.models import Guardian, StudentGuardian, StudentImage, StudentTeacherAssignment
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,10 @@ class StudentProfile:
     concerns: list[IndicatorFrequency]
     recent_notes: list[str]
     sources: list[ProfileSource]
+    images: list[StudentImage]
+    guardians: list[Guardian]
+    teacher_assignments: list[StudentTeacherAssignment]
+    teacher_names: dict[str, str]
 
 
 _DAILY_TREND_ATTRS = (
@@ -106,6 +111,7 @@ def build_student_profile(
     class_id: str,
     date_from: str,
     date_to: str,
+    include_family: bool = False,
 ) -> StudentProfile:
     student = db.get(Student, student_id)
     if student is None:
@@ -229,6 +235,34 @@ def build_student_profile(
         if feedback.note and feedback.note.strip()
     ][:10]
 
+    images = list(db.scalars(
+        select(StudentImage)
+        .where(StudentImage.student_id == student_id, StudentImage.status == "active")
+        .order_by(StudentImage.uploaded_at.desc(), StudentImage.source_position)
+        .limit(24)
+    ))
+    guardians: list[Guardian] = []
+    teacher_assignments: list[StudentTeacherAssignment] = []
+    teacher_names: dict[str, str] = {}
+    if include_family:
+        guardians = list(db.scalars(
+            select(Guardian)
+            .join(StudentGuardian, StudentGuardian.guardian_id == Guardian.guardian_id)
+            .where(StudentGuardian.student_id == student_id, StudentGuardian.status == "active", Guardian.status == "active")
+            .order_by(Guardian.name)
+        ).unique())
+        teacher_assignments = list(db.scalars(
+            select(StudentTeacherAssignment)
+            .where(StudentTeacherAssignment.student_id == student_id)
+            .order_by(StudentTeacherAssignment.role, StudentTeacherAssignment.start_date.desc())
+        ))
+        assigned_teacher_ids = {row.teacher_id for row in teacher_assignments}
+        if assigned_teacher_ids:
+            teacher_names = {
+                row.teacher_id: row.name
+                for row in db.scalars(select(Teacher).where(Teacher.teacher_id.in_(assigned_teacher_ids)))
+            }
+
     return StudentProfile(
         student=student,
         klass=klass,
@@ -239,4 +273,8 @@ def build_student_profile(
         concerns=concerns,
         recent_notes=recent_notes,
         sources=sources,
+        images=images,
+        guardians=guardians,
+        teacher_assignments=teacher_assignments,
+        teacher_names=teacher_names,
     )

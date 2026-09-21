@@ -16,6 +16,7 @@ from app.chat.providers import (
 from app.chat.routes import router as chat_router
 from app.export.routes import router as export_router
 from app.feedback.routes import router as feedback_router
+from app.family.routes import router as family_router
 from app.history.routes import router as history_router
 from app.profiles.routes import router as profiles_router
 from app.reports.generators import AIReportGenerator
@@ -111,6 +112,7 @@ def create_app(
     application.include_router(feedback_router)
     application.include_router(history_router)
     application.include_router(profiles_router)
+    application.include_router(family_router)
     application.include_router(reports_router)
     application.include_router(chat_router)
     application.include_router(export_router)

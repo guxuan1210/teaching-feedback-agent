@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}学生家庭与图片{% endblock %}
+{% block content %}
+<h1>{{ student.name }} <small class="muted">{{ student.student_id }}</small></h1>
+
+{% if one_time_invitation %}
+  <section class="family-callout" role="status">
+    <h2>家长绑定邀请码</h2>
+    <p>请立即复制，仅本次显示：<strong class="invitation-code">{{ one_time_invitation.code }}</strong></p>
+    <p class="muted">邀请码有效期为 7 天，且只能使用一次。</p>
+  </section>
+{% endif %}
+
+{% if is_admin %}
+<section class="family-management">
+  <h2>家长关系管理</h2>
+  {% if guardians %}
+  <ul>{% for guardian in guardians %}<li>{{ guardian.name }} · {{ {'father': '父亲', 'mother': '母亲', 'other': '其他监护人'}[guardian.relationship_type] }}</li>{% endfor %}</ul>
+  {% else %}<p class="muted">尚未绑定家长。</p>{% endif %}
+  <form method="post" action="/family/students/{{ student.student_id }}/invitations" class="inline-form">
+    <button type="submit">生成家长邀请码</button>
+  </form>
+  {% if invitations %}
+  <h3>邀请码记录</h3>
+  <table><thead><tr><th>创建时间</th><th>使用情况</th><th>操作</th></tr></thead><tbody>
+    {% for invitation in invitations %}
+    <tr><td>{{ invitation.created_at }}</td><td>{{ invitation.used_count }}/{{ invitation.max_uses }}{% if invitation.revoked_at %} · 已撤销{% endif %}</td><td>
+      {% if not invitation.revoked_at and invitation.used_count < invitation.max_uses %}<form method="post" action="/family/invitations/{{ invitation.invitation_id }}/revoke"><button class="button-secondary" type="submit">撤销</button></form>{% endif %}
+    </td></tr>
+    {% endfor %}
+  </tbody></table>
+  {% endif %}
+</section>
+
+<section class="family-management">
+  <h2>教师关系管理</h2>
+  <form method="post" action="/family/students/{{ student.student_id }}/teachers" class="family-assignment-form">
+    <label>教师<select name="teacher_id" required>{% for item in teachers %}<option value="{{ item.teacher_id }}">{{ item.name }}</option>{% endfor %}</select></label>
+    <label>角色<select name="role"><option value="primary">主责教师</option><option value="subject">科任教师</option><option value="collaborator">协作教师</option></select></label>
+    <label>开始日期<input type="date" name="start_date" required></label>
+    <button type="submit">添加关系</button>
+  </form>
+  {% if assignments %}
+  <table><thead><tr><th>教师</th><th>角色</th><th>有效期</th><th>状态</th><th></th></tr></thead><tbody>
+    {% for assignment in assignments %}
+    <tr><td>{{ teacher_names.get(assignment.teacher_id, assignment.teacher_id) }}</td><td>{{ {'primary': '主责', 'subject': '科任', 'collaborator': '协作'}[assignment.role] }}</td><td>{{ assignment.start_date }} — {{ assignment.end_date or '至今' }}</td><td>{{ '有效' if assignment.status == 'active' else '已撤销' }}</td><td>
+      {% if assignment.status == 'active' %}<form method="post" action="/family/teacher-assignments/{{ assignment.assignment_id }}/revoke"><input type="hidden" name="end_date" value="{{ today }}"><button class="button-secondary" type="submit">撤销</button></form>{% endif %}
+    </td></tr>
+    {% endfor %}
+  </tbody></table>
+  {% endif %}
+</section>
+
+<section class="family-management">
+  <h2>沟通记录</h2>
+  {% if conversations %}
+  <ul class="family-conversation-links">
+    {% for conversation in conversations %}
+    <li><a href="/family/conversations/{{ conversation.conversation_id }}">{{ conversation.guardian_id }} · {{ conversation.last_message_at }} · {{ conversation.status }}</a></li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="muted">暂无家长沟通记录。</p>{% endif %}
+</section>
+{% endif %}
+
+<section class="family-images">
+  <h2>学生图片</h2>
+  {% if images %}
+  <div class="student-image-grid">
+    {% for image in images %}
+    <article class="student-image-card {% if image.status == 'deleted' %}is-deleted{% endif %}">
+      {% if image.status == 'active' %}<img src="/family/images/{{ image.image_id }}" alt="{{ student.name }}的图片" loading="lazy">
+      {% else %}<div class="image-placeholder">图片已删除</div>{% endif %}
+      <div class="student-image-meta"><span>{{ image.uploaded_at[:10] }}</span>{% if image.caption %}<p>{{ image.caption }}</p>{% endif %}</div>
+      {% if is_admin %}
+        {% if image.status == 'active' %}<form method="post" action="/family/images/{{ image.image_id }}/delete"><button class="button-secondary" type="submit">删除</button></form>
+        {% else %}<form method="post" action="/family/images/{{ image.image_id }}/restore"><button class="button-secondary" type="submit">恢复</button></form>{% endif %}
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}<p class="muted">暂无已归档图片。</p>{% endif %}
+</section>
+{% endblock %}

@@ -22,6 +22,7 @@ from app.catalog.models import Enrollment, Teacher
 from app.core.auth import is_admin, require_login
 from app.core.database import get_db
 from app.profiles import service
+from app.family.permissions import teacher_can_access_student
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -133,6 +134,7 @@ def profile_detail(
                 "errors": errors,
                 "DAILY_TREND_LABELS": DAILY_TREND_LABELS,
                 "SPECIAL_TREND_LABELS": SPECIAL_TREND_LABELS,
+                "is_admin": is_admin(teacher),
             },
             status_code=status_code,
         )
@@ -164,7 +166,12 @@ def profile_detail(
             class_id=class_id,
             date_from=date_from,
             date_to=date_to,
+            include_family=is_admin(teacher),
         )
+        if not is_admin(teacher) and not teacher_can_access_student(
+            db, teacher.teacher_id, student_id
+        ):
+            profile.images = []
     except ValueError as exc:
         return _render(None, [str(exc)], 404)
 
