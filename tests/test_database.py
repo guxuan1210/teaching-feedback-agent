@@ -21,8 +21,8 @@ def test_foreign_keys_are_enabled(db_session):
     assert enabled == 1
 
 
-def test_schema_version_is_ten():
-    assert SCHEMA_VERSION == 10
+def test_schema_version_is_eleven():
+    assert SCHEMA_VERSION == 11
 
 
 def test_compose_legacy_parent_message_uses_deterministic_format():
@@ -251,7 +251,7 @@ def test_v7_database_upgrades_to_v10_with_family_tables(tmp_path):
         "family_message",
     }
     with engine.connect() as upgraded:
-        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 10
+        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 11
     engine.dispose()
 
 
@@ -277,7 +277,7 @@ def test_v9_database_adds_quarantine_path_without_losing_images(tmp_path):
     columns = {item["name"] for item in inspect(engine).get_columns("student_image")}
     assert "quarantine_path" in columns
     with engine.connect() as migrated:
-        assert migrated.exec_driver_sql("PRAGMA user_version").scalar_one() == 10
+        assert migrated.exec_driver_sql("PRAGMA user_version").scalar_one() == 11
         assert migrated.exec_driver_sql("SELECT image_id,quarantine_path FROM student_image").one() == ("IMG-MIG", None)
     engine.dispose()
 
@@ -387,7 +387,7 @@ def test_v8_family_database_migrates_assignments_without_data_loss(tmp_path):
     assert "origin = 'manual'" in assignment_checks
     assert "origin = 'class_sync'" in assignment_checks
     with engine.begin() as upgraded:
-        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 10
+        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 11
         rows = upgraded.exec_driver_sql(
             "SELECT assignment_id,start_date,end_date,status,origin,source_enrollment_id "
             "FROM student_teacher_assignment ORDER BY assignment_id"
@@ -415,3 +415,45 @@ def test_v8_family_database_migrates_assignments_without_data_loss(tmp_path):
                 "VALUES ('STA-BAD','S-V8','T-V8','subject','2026-09-02','revoked','bogus')"
             )
     engine.dispose()
+
+
+def test_v10_database_adds_outbox_link_without_losing_family_messages(tmp_path):
+    path = tmp_path / "v10-outbox.db"
+    schema = Path("db/schema.sql").read_text(encoding="utf-8")
+    legacy_schema = schema.replace("      reply_to_message_id TEXT,\n", "").replace(
+        "CREATE INDEX IF NOT EXISTS ix_family_message_reply_to_message_id\n"
+        "    ON family_message(reply_to_message_id);\n",
+        "",
+    )
+    connection = sqlite3.connect(path)
+    connection.executescript(legacy_schema)
+    connection.execute(
+        "INSERT INTO teacher (teacher_id,name,role,status) VALUES ('T-OUTBOX','Teacher','admin','active')"
+    )
+    connection.execute(
+        "INSERT INTO student (student_id,name,status) VALUES ('S-OUTBOX','Student','active')"
+    )
+    connection.execute(
+        "INSERT INTO guardian (guardian_id,name,relationship_type,status) VALUES ('G-OUTBOX','Parent','other','active')"
+    )
+    connection.execute(
+        "INSERT INTO family_conversation (conversation_id,guardian_id,student_id,channel,channel_conversation_id,status,last_message_at) "
+        "VALUES ('FC-OUTBOX','G-OUTBOX','S-OUTBOX','wecom_customer','EXT-OUTBOX','active','2026-09-22')"
+    )
+    connection.execute(
+        "INSERT INTO family_message (message_id,conversation_id,direction,sender_type,sender_id,content,channel_message_id,status) "
+        "VALUES ('FM-OUTBOX','FC-OUTBOX','inbound','guardian','G-OUTBOX','Question','IN-OUTBOX','completed')"
+    )
+    connection.execute("PRAGMA user_version = 10")
+    connection.commit()
+    connection.close()
+
+    engine = build_engine(f"sqlite+pysqlite:///{path.as_posix()}")
+    initialize_database(engine)
+    columns = {column["name"] for column in inspect(engine).get_columns("family_message")}
+    assert "reply_to_message_id" in columns
+    with engine.connect() as migrated:
+        assert migrated.exec_driver_sql("PRAGMA user_version").scalar_one() == 11
+        assert migrated.exec_driver_sql(
+            "SELECT content FROM family_message WHERE message_id='FM-OUTBOX'"
+        ).scalar_one() == "Question"

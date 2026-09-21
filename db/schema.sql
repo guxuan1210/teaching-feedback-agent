@@ -493,7 +493,8 @@ CREATE TABLE IF NOT EXISTS family_message (
     sender_id          TEXT,
     content            TEXT NOT NULL,
     image_id           TEXT REFERENCES student_image(image_id) ON DELETE SET NULL,
-    channel_message_id TEXT UNIQUE,
+      channel_message_id TEXT UNIQUE,
+      reply_to_message_id TEXT,
     status             TEXT NOT NULL DEFAULT 'pending',
     failure_reason     TEXT,
     created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -512,3 +513,5 @@ CREATE TABLE IF NOT EXISTS family_message (
 );
 CREATE INDEX IF NOT EXISTS ix_family_message_conversation_created
     ON family_message(conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_family_message_reply_to_message_id
+    ON family_message(reply_to_message_id);

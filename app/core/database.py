@@ -12,7 +12,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class Base(DeclarativeBase):
@@ -108,6 +108,16 @@ def _add_missing_columns(engine: Engine) -> None:
         image_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(student_image)")}
         if image_cols and "quarantine_path" not in image_cols:
             conn.exec_driver_sql("ALTER TABLE student_image ADD COLUMN quarantine_path VARCHAR")
+        family_message_cols = {
+            row[1] for row in conn.exec_driver_sql("PRAGMA table_info(family_message)")
+        }
+        if family_message_cols and "reply_to_message_id" not in family_message_cols:
+            conn.exec_driver_sql("ALTER TABLE family_message ADD COLUMN reply_to_message_id VARCHAR")
+        if family_message_cols:
+            conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_family_message_reply_to_message_id "
+                "ON family_message(reply_to_message_id)"
+            )
 
 
 def _migrate_student_image_quarantine_check(engine: Engine) -> None:

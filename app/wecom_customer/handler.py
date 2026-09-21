@@ -16,9 +16,10 @@ from app.family import invitations
 from app.catalog.models import Teacher
 from app.family.models import (
     FamilyConversation, FamilyMessage, Guardian, GuardianChannelBinding,
-    GuardianInvitation, StudentTeacherAssignment,
+    GuardianInvitation, StudentImage, StudentTeacherAssignment,
 )
-from app.family.parent_assistant import ParentReply, answer_parent_query
+from app.family import conversations
+from app.family.parent_assistant import ParentReply, answer_parent_query, answer_parent_question
 from app.family.permissions import guardian_can_access_student, list_students_for_guardian
 
 
@@ -133,6 +134,90 @@ def _record_inbound(db: Session, conversation: FamilyConversation, message_id: s
     return True
 
 
+def _deliver_outbox(db: Session, customer, external_user_id: str, image_store, inbound_channel_message_id: str):
+    """Send only persisted outbox rows; callers must not resend returned ParentReply values."""
+    rows = conversations.pending_replies_for_inbound(db, inbound_channel_message_id)
+    for row in rows:
+        try:
+            if row.image_id:
+                image = db.get(StudentImage, row.image_id)
+                if image is None or image_store is None:
+                    raise ValueError("image payload unavailable")
+                with image_store.open(image.storage_path) as source:
+                    media_id = customer.upload_image(source.read(), f"{image.image_id}{image.extension}")
+                channel_id = customer.send_image(external_user_id, media_id)
+            else:
+                channel_id = customer.send_text(external_user_id, row.content)
+            conversations.mark_message_sent(db, row.message_id, channel_id)
+        except Exception as exc:
+            # API implementations wrap transport failures, but injected or future
+            # clients may raise any ordinary exception. Do not erase the outbox row.
+            conversations.mark_message_failed(
+                db, row.message_id, f"渠道发送失败：{type(exc).__name__}"
+            )
+
+
+def _replies_for_inbound(db: Session, inbound: FamilyMessage) -> list[ParentReply]:
+    rows = conversations.outbound_for_inbound(db, inbound.message_id)
+    replies = []
+    for row in rows:
+        image_path = None
+        filename = None
+        if row.image_id:
+            image = db.get(StudentImage, row.image_id)
+            if image is not None:
+                image_path, filename = image.storage_path, f"{image.image_id}{image.extension}"
+        inbound = db.scalar(select(FamilyMessage).where(
+            FamilyMessage.message_id == row.reply_to_message_id
+        ))
+        handoff = bool(inbound and any(
+            term in inbound.content for term in ("请老师回复", "转老师")
+        ))
+        replies.append(ParentReply(row.content, image_path, filename, handoff))
+    return replies
+
+
+def _queue_query_replies(
+    db: Session, conversation: FamilyConversation, inbound: FamilyMessage,
+    guardian_id: str, student_id: str, text: str,
+) -> list[ParentReply]:
+    replies = answer_parent_query(
+        db, guardian_id=guardian_id, student_id=student_id, text=text,
+    )
+    for reply in replies:
+        conversations.record_bot_reply(
+            db, conversation.conversation_id, reply.content,
+            reply_to_message_id=inbound.message_id,
+        )
+        if reply.image_path:
+            image = db.scalar(select(StudentImage).where(
+                StudentImage.student_id == student_id,
+                StudentImage.storage_path == reply.image_path,
+                StudentImage.status == "active",
+            ))
+            if image is not None:
+                conversations.record_bot_reply(
+                    db, conversation.conversation_id, reply.content,
+                    reply_to_message_id=inbound.message_id, image_id=image.image_id,
+                )
+    if any(reply.handoff_marker for reply in replies):
+        conversations.request_teacher_reply(db, conversation.conversation_id, text)
+    return replies
+
+
+def _queue_simple_replies(
+    db: Session, conversation: FamilyConversation, inbound: FamilyMessage,
+    customer, external_user_id: str, image_store, replies: list[ParentReply],
+) -> list[ParentReply]:
+    for reply in replies:
+        conversations.record_bot_reply(
+            db, conversation.conversation_id, reply.content,
+            reply_to_message_id=inbound.message_id,
+        )
+    _deliver_outbox(db, customer, external_user_id, image_store, inbound.channel_message_id)
+    return _replies_for_inbound(db, inbound)
+
+
 def _invite_by_code(db: Session, text: str, secret_key: str) -> GuardianInvitation | None:
     code = (text or "").strip().upper()
     if not _CODE.fullmatch(code) or not (secret_key or "").strip():
@@ -151,19 +236,53 @@ def _choice_prompt(db: Session, guardian_id: str) -> list[ParentReply]:
 
 def process_parent_text(
     db: Session, customer, *, secret_key: str, external_user_id: str,
-    message_id: str, text: str, image_store=None,
+    message_id: str, text: str, image_store=None, assistant_provider=None,
 ) -> list[ParentReply]:
-    """Process text idempotently with a fixed set of deterministic actions."""
+    """Process and deliver deterministic responses through a durable outbox.
+
+    Returned replies describe persisted actions; channel delivery is performed here,
+    so adapters must not send these replies a second time.
+    """
     external = (external_user_id or "").strip()
     msg_id = (message_id or "").strip()
     body = (text or "").strip()
     if not external or not msg_id:
         return _reply("【机器人回复】消息信息不完整，请稍后重试。")
 
-    # Durable replay check precedes state changes or query execution.
-    duplicate = db.scalar(select(FamilyMessage).where(FamilyMessage.channel_message_id == msg_id))
+    # A duplicate callback replays the exact saved outbox and retries only rows that
+    # have not reached the channel successfully.
+    duplicate = db.scalar(select(FamilyMessage).where(
+        FamilyMessage.channel_message_id == msg_id,
+        FamilyMessage.direction == "inbound",
+    ))
     if duplicate is not None:
-        return _reply("【机器人回复】这条消息已处理。")
+        saved = conversations.outbound_for_inbound(db, duplicate.message_id)
+        replayable_text = duplicate.content not in (
+            "[邀请码已核销]", *_RELATIONSHIPS.keys()
+        )
+        if not saved and replayable_text:
+            binding = db.scalar(select(GuardianChannelBinding).where(
+                GuardianChannelBinding.channel == "wecom_customer",
+                GuardianChannelBinding.external_user_id == external,
+            ))
+            guardian = db.get(Guardian, binding.guardian_id) if binding and binding.guardian_id else None
+            student_id = binding.active_student_id if binding else None
+            if (
+                guardian is not None and guardian.status == "active" and student_id
+                and binding.status == "active"
+                and guardian_can_access_student(db, guardian.guardian_id, student_id)
+            ):
+                conversation = _conversation(db, guardian.guardian_id, student_id, external)
+                _queue_query_replies(
+                    db, conversation, duplicate, guardian.guardian_id,
+                    student_id, duplicate.content,
+                )
+                saved = conversations.outbound_for_inbound(db, duplicate.message_id)
+        if saved and all(row.status == "completed" for row in saved):
+            return _reply("【机器人回复】这条消息已处理。")
+        _deliver_outbox(db, customer, external, image_store, msg_id)
+        result = _replies_for_inbound(db, duplicate)
+        return result or _reply("【机器人回复】这条消息已处理。")
 
     binding = _binding(db, external)
     guardian = db.get(Guardian, binding.guardian_id) if binding.guardian_id else None
@@ -192,6 +311,10 @@ def process_parent_text(
             active_conversation = _conversation(db, guardian.guardian_id, active_id, external)
             if not _record_inbound(db, active_conversation, msg_id, body):
                 return _reply("【机器人回复】这条消息已处理。")
+            inbound = db.scalar(select(FamilyMessage).where(
+                FamilyMessage.channel_message_id == msg_id,
+                FamilyMessage.direction == "inbound",
+            ))
 
     pending = _load(binding.pending_state_json)
     if pending.get("step") == "awaiting_relationship":
@@ -251,23 +374,38 @@ def process_parent_text(
         elif body:
             index = next((i for i, child in enumerate(students) if child.student_id == body), None)
         if index is None or index < 0 or index >= len(students):
-            return _choice_prompt(db, guardian.guardian_id)
+            return _queue_simple_replies(
+                db, active_conversation, inbound, customer, external, image_store,
+                _choice_prompt(db, guardian.guardian_id),
+            )
         selected = students[index]
         if not guardian_can_access_student(db, guardian.guardian_id, selected.student_id):
             binding.pending_state_json = None
             db.commit()
-            return _reply("【机器人回复】你没有查看该学生的权限。")
+            return _queue_simple_replies(
+                db, active_conversation, inbound, customer, external, image_store,
+                _reply("【机器人回复】你没有查看该学生的权限。"),
+            )
         binding.active_student_id = selected.student_id
         binding.pending_state_json = None
         db.commit()
-        return _reply(f"【机器人回复】已切换到{selected.name}。")
+        return _queue_simple_replies(
+            db, active_conversation, inbound, customer, external, image_store,
+            _reply(f"【机器人回复】已切换到{selected.name}。"),
+        )
 
     if "切换孩子" in body:
         if len(students) < 2:
-            return _reply("【机器人回复】目前只绑定了一个孩子。")
+            return _queue_simple_replies(
+                db, active_conversation, inbound, customer, external, image_store,
+                _reply("【机器人回复】目前只绑定了一个孩子。"),
+            )
         binding.pending_state_json = _dump({"step": "awaiting_student"})
         db.commit()
-        return _choice_prompt(db, guardian.guardian_id)
+        return _queue_simple_replies(
+            db, active_conversation, inbound, customer, external, image_store,
+            _choice_prompt(db, guardian.guardian_id),
+        )
 
     active_student_id = binding.active_student_id
     if not active_student_id or not guardian_can_access_student(db, guardian.guardian_id, active_student_id):
@@ -277,25 +415,28 @@ def process_parent_text(
             return _choice_prompt(db, guardian.guardian_id)
         return _reply("【机器人回复】目前没有可访问的学生，请联系老师。")
 
-    replies = answer_parent_query(
-        db, guardian_id=guardian.guardian_id, student_id=active_student_id,
-        text=body,
+    deterministic_intent = any(
+        token in body for token in ("图片", "反馈", "周报", "请老师回复", "转老师")
     )
-    if image_store is not None and callable(getattr(customer, "upload_image", None)) and callable(
-        getattr(customer, "send_image", None)
-    ):
-        for reply in replies:
-            if not reply.image_path:
-                continue
-            try:
-                send_text = getattr(customer, "send_text", None)
-                if callable(send_text):
-                    send_text(external, reply.content)
-                with image_store.open(reply.image_path) as image_file:
-                    media_id = customer.upload_image(image_file.read(), reply.image_filename or "image")
-                customer.send_image(external, media_id)
-            except (OSError, ValueError):
-                # Keep the text metadata; a failed temporary-media upload must not
-                # prevent later images from being delivered.
-                continue
-    return replies
+    if assistant_provider is not None and not deterministic_intent:
+        answer_parent_question(
+            db, assistant_provider, guardian_id=guardian.guardian_id,
+            student_id=active_student_id, text=body, inbound_message=inbound,
+        )
+        _deliver_outbox(db, customer, external, image_store, msg_id)
+        return _replies_for_inbound(db, inbound)
+
+    # Persist every text and image action before any outbound API call. Image sends
+    # point to the already archived image row; bytes are never persisted in SQL.
+    inbound = db.scalar(select(FamilyMessage).where(
+        FamilyMessage.channel_message_id == msg_id,
+        FamilyMessage.direction == "inbound",
+    ))
+    if inbound is None:
+        return _reply("【机器人回复】这条消息已处理。")
+    _queue_query_replies(
+        db, active_conversation, inbound, guardian.guardian_id,
+        active_student_id, body,
+    )
+    _deliver_outbox(db, customer, external, image_store, msg_id)
+    return _replies_for_inbound(db, inbound)

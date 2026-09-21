@@ -330,6 +330,7 @@ class FamilyMessage(Base):
         String, ForeignKey("student_image.image_id", ondelete="SET NULL")
     )
     channel_message_id: Mapped[str | None] = mapped_column(String, unique=True)
+    reply_to_message_id: Mapped[str | None] = mapped_column(String, index=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     failure_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(String, nullable=False, default=_utcnow)

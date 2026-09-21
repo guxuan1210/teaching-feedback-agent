@@ -96,7 +96,7 @@ def test_duplicate_bound_message_is_idempotent(db_session, student, teacher):
         db_session, object(), secret_key=SECRET, external_user_id="EXT1",
         message_id="M3", text="切换孩子",
     )
-    assert second[-1].content == "【机器人回复】这条消息已处理。"
+    assert second[-1].content == first[-1].content
     assert db_session.query(FamilyMessage).filter_by(channel_message_id="M3").count() == 1
 
 
