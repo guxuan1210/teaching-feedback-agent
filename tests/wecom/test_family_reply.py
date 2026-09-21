@@ -81,7 +81,7 @@ def test_parent_question_is_pushed_to_primary_teacher(engine, teacher, student, 
     payload = bot.sent_messages[-1]
     content = payload["markdown"]["content"]
     assert payload["user_id"] == "WX-TEACHER"
-    assert "家长请求老师回复" in content and "FAM-1" in content
+    assert "家长请求老师回复" in content and "FAM-1" in content.replace(r"\-", "-")
     assert "测试学生" in content and "母亲" in content
     assert "孩子这周作业需要怎么准备？" in content
     assert "EXT-PARENT" not in content
@@ -116,6 +116,40 @@ def test_revoked_parent_channel_binding_does_not_trigger_teacher_notification(
 
     assert asyncio.run(gateway.notify_teacher(conversation.conversation_id)) is False
     assert bot.sent_messages == []
+
+
+def test_teacher_notification_escapes_markdown_and_normalizes_parent_text(
+    engine, pending_conversation, db_session
+):
+    from app.core.database import build_session_factory
+
+    conversation, inbound, _assignment = pending_conversation
+    db_session.get(Guardian, "G1").name = "家长*_`[伪](链接)>\n**标题**"
+    inbound.content = "问题 *斜体* _下划线_ `代码` [链接](x) > 引用\n新行"
+    db_session.commit()
+
+    class Bot:
+        def __init__(self):
+            self.sent_messages = []
+
+        async def send_message(self, user_id, payload):
+            self.sent_messages.append(payload)
+
+    bot = Bot()
+    gateway = WecomGateway(
+        config=WecomConfig(True, "bot", "secret", None),
+        session_factory=build_session_factory(engine), chat_provider=None,
+        binding_secret="secret", client_factory=lambda _config: bot,
+    )
+    gateway.client = bot
+
+    assert asyncio.run(gateway.notify_teacher(conversation.conversation_id)) is True
+
+    content = bot.sent_messages[-1]["markdown"]["content"]
+    assert "家长\\*\\_\\`\\[伪\\]\\(链接\\)\\> \\*\\*标题\\*\\*" in content
+    assert "问题 \\*斜体\\* \\_下划线\\_ \\`代码\\` \\[链接\\]\\(x\\) \\> 引用 新行" in content
+    assert "\\*\\*标题\\*\\*" in content
+    assert "\n新行" not in content and "\n**标题**" not in content
 
 
 def test_teacher_reply_is_delivered_with_server_generated_label(db_session, pending_conversation):

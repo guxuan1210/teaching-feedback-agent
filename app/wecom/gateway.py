@@ -33,6 +33,20 @@ from app.wecom.media_handler import (
 logger = logging.getLogger(__name__)
 
 
+def _plain_markdown(value: str) -> str:
+    """Render untrusted values as one line of plain text in WeCom markdown."""
+    normalized = re.sub(r"[\r\n\t]+", " ", value or "").strip()
+    normalized = normalized.replace("&", "&amp;").replace("<", "&lt;")
+    escapes = {
+        "\\": r"\\", "`": r"\`", "*": r"\*", "_": r"\_",
+        "{": r"\{", "}": r"\}", "[": r"\[", "]": r"\]",
+        "(": r"\(", ")": r"\)", "#": r"\#", "+": r"\+",
+        "-": r"\-", ".": r"\.", "!": r"\!", "|": r"\|",
+        ">": r"\>", "~": r"\~",
+    }
+    return normalized.translate(str.maketrans(escapes))
+
+
 class SafeWecomLogger:
     """SDK logger that never forwards message bodies or credentials."""
 
@@ -221,16 +235,13 @@ class WecomGateway:
             relationship = {"father": "父亲", "mother": "母亲", "other": "监护人"}.get(
                 guardian.relationship_type, "监护人"
             )
-            # Render untrusted names and parent text as plain markdown text.
-            def safe(value: str) -> str:
-                return (value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             content = (
                 f"**家长请求老师回复**\n\n"
-                f"学生：{safe(student.name)}（{safe(student.student_id)}）\n"
-                f"家长：{safe(relationship)} {safe(guardian.name)}\n"
-                f"问题：{safe(message.content)}\n\n"
-                f"会话编号：{safe(conversation.conversation_id)}\n"
-                f"请回复：`回复 {safe(conversation.conversation_id)} 回复内容`"
+                f"学生：{_plain_markdown(student.name)}（{_plain_markdown(student.student_id)}）\n"
+                f"家长：{_plain_markdown(relationship)} {_plain_markdown(guardian.name)}\n"
+                f"问题：{_plain_markdown(message.content)}\n\n"
+                f"会话编号：{_plain_markdown(conversation.conversation_id)}\n"
+                f"请回复：`回复 {_plain_markdown(conversation.conversation_id)} 回复内容`"
             )
         if self.client is None:
             return False
