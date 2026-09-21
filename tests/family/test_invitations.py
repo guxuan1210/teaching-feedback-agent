@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect as pyinspect
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -25,6 +26,13 @@ from app.family.permissions import list_students_for_guardian
 
 NOW = datetime(2026, 9, 21, 8, 0, tzinfo=timezone.utc)
 SECRET = "test-secret"
+
+
+def test_redeem_public_signature_does_not_expose_retry_controls():
+    assert set(pyinspect.signature(redeem_guardian_invitation).parameters) == {
+        "db", "code", "external_user_id", "relationship", "guardian_name",
+        "secret_key", "now",
+    }
 
 
 def _scope(db, *, teacher_role="管理员"):

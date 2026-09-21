@@ -11,7 +11,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class Base(DeclarativeBase):
@@ -103,6 +103,30 @@ def _add_missing_columns(engine: Engine) -> None:
         if message_cols and "channel" not in message_cols:
             conn.exec_driver_sql(
                 "ALTER TABLE chat_message ADD COLUMN channel VARCHAR"
+            )
+        assignment_cols = {
+            row[1]
+            for row in conn.exec_driver_sql(
+                "PRAGMA table_info(student_teacher_assignment)"
+            )
+        }
+        if assignment_cols and "origin" not in assignment_cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE student_teacher_assignment "
+                "ADD COLUMN origin VARCHAR NOT NULL DEFAULT 'manual'"
+            )
+        if assignment_cols and "source_enrollment_id" not in assignment_cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE student_teacher_assignment "
+                "ADD COLUMN source_enrollment_id INTEGER "
+                "REFERENCES enrollment(enrollment_id)"
+            )
+        if assignment_cols:
+            conn.exec_driver_sql(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_student_teacher_active_role "
+                "ON student_teacher_assignment(student_id, teacher_id, role) "
+                "WHERE status = 'active'"
             )
 
 

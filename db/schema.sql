@@ -1,7 +1,8 @@
 -- =====================================================================
 -- 教学反馈数据采集 Demo · 数据库 Schema（SQLite）
 -- 本文件是可执行 SQLAlchemy 模型（app/*/models.py）的忠实镜像，
--- 共 34 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
+-- Schema version 9，共 34 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
+-- v8 升级时既有 guardian_invitation.max_uses 保持原列定义；服务始终显式写入 1。
 -- =====================================================================
 
 PRAGMA foreign_keys = ON;
@@ -422,7 +423,7 @@ CREATE TABLE IF NOT EXISTS student_teacher_assignment (
 );
 CREATE INDEX IF NOT EXISTS ix_student_teacher_assignment_lookup
     ON student_teacher_assignment(teacher_id, student_id, status);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_student_teacher_assignment_active
+CREATE UNIQUE INDEX IF NOT EXISTS uq_student_teacher_active_role
     ON student_teacher_assignment(student_id, teacher_id, role) WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS student_image (

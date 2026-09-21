@@ -178,7 +178,7 @@ class StudentTeacherAssignment(Base):
             name="ck_student_teacher_assignment_origin",
         ),
         Index(
-            "uq_student_teacher_assignment_active",
+            "uq_student_teacher_active_role",
             "student_id", "teacher_id", "role",
             unique=True,
             sqlite_where=text("status = 'active'"),

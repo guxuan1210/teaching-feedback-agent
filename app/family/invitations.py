@@ -145,9 +145,25 @@ def redeem_guardian_invitation(
     *,
     secret_key: str,
     now: datetime | None = None,
-    _retry_on_conflict: bool = True,
 ) -> Guardian:
     """Atomically claim an invitation and bind or reuse its guardian identity."""
+    return _redeem_guardian_invitation(
+        db, code, external_user_id, relationship, guardian_name,
+        secret_key=secret_key, now=now, retry_on_conflict=True,
+    )
+
+
+def _redeem_guardian_invitation(
+    db: Session,
+    code: str,
+    external_user_id: str,
+    relationship: str,
+    guardian_name: str,
+    *,
+    secret_key: str,
+    now: datetime | None,
+    retry_on_conflict: bool,
+) -> Guardian:
     secret = _require_secret(secret_key)
     normalized = _normalized_code(code)
     if not normalized:
@@ -249,10 +265,10 @@ def redeem_guardian_invitation(
         db.flush()
     except (IntegrityError, OperationalError) as exc:
         db.rollback()
-        if _retry_on_conflict:
-            return redeem_guardian_invitation(
+        if retry_on_conflict:
+            return _redeem_guardian_invitation(
                 db, code, external_user_id, relationship, guardian_name,
-                secret_key=secret_key, now=current, _retry_on_conflict=False,
+                secret_key=secret_key, now=current, retry_on_conflict=False,
             )
         raise ValueError("监护人绑定发生并发冲突，请重试") from exc
 
@@ -274,10 +290,10 @@ def redeem_guardian_invitation(
         db.commit()
     except (IntegrityError, OperationalError) as exc:
         db.rollback()
-        if _retry_on_conflict:
-            return redeem_guardian_invitation(
+        if retry_on_conflict:
+            return _redeem_guardian_invitation(
                 db, code, external_user_id, relationship, guardian_name,
-                secret_key=secret_key, now=current, _retry_on_conflict=False,
+                secret_key=secret_key, now=current, retry_on_conflict=False,
             )
         raise ValueError("监护人绑定发生并发冲突，请重试") from exc
     db.refresh(invitation)

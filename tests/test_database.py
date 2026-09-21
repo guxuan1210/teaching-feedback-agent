@@ -20,8 +20,8 @@ def test_foreign_keys_are_enabled(db_session):
     assert enabled == 1
 
 
-def test_schema_version_is_eight():
-    assert SCHEMA_VERSION == 8
+def test_schema_version_is_nine():
+    assert SCHEMA_VERSION == 9
 
 
 def test_compose_legacy_parent_message_uses_deterministic_format():
@@ -226,7 +226,7 @@ def test_schema_sql_executes_and_exposes_family_structure(tmp_path):
     engine.dispose()
 
 
-def test_v7_database_upgrades_to_v8_with_family_tables(tmp_path):
+def test_v7_database_upgrades_to_v9_with_family_tables(tmp_path):
     path = tmp_path / "v7.db"
     schema = Path("db/schema.sql").read_text(encoding="utf-8")
     legacy_schema = schema.split("CREATE TABLE IF NOT EXISTS guardian (", 1)[0]
@@ -250,5 +250,78 @@ def test_v7_database_upgrades_to_v8_with_family_tables(tmp_path):
         "family_message",
     }
     with engine.connect() as upgraded:
-        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 8
+        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 9
+    engine.dispose()
+
+
+def test_v8_family_database_migrates_assignments_without_data_loss(tmp_path):
+    path = tmp_path / "v8-family.db"
+    schema = Path("db/schema.sql").read_text(encoding="utf-8")
+    old_schema = schema.replace(
+        "    max_uses             INTEGER NOT NULL DEFAULT 1,\n",
+        "    max_uses             INTEGER NOT NULL,\n",
+    ).replace(
+        "    origin        TEXT NOT NULL DEFAULT 'manual',\n"
+        "    source_enrollment_id INTEGER REFERENCES enrollment(enrollment_id),\n",
+        "",
+    ).replace(
+        "    CHECK (status IN ('active', 'revoked')),\n"
+        "    CHECK ((origin = 'manual' AND source_enrollment_id IS NULL)\n"
+        "        OR (origin = 'class_sync' AND source_enrollment_id IS NOT NULL AND role = 'primary'))\n",
+        "    CHECK (status IN ('active', 'revoked'))\n",
+    ).replace(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_student_teacher_active_role\n"
+        "    ON student_teacher_assignment(student_id, teacher_id, role) WHERE status = 'active';\n",
+        "",
+    )
+    connection = sqlite3.connect(path)
+    connection.executescript(old_schema)
+    connection.execute(
+        "INSERT INTO teacher (teacher_id,name,role,status) VALUES ('T-V8','旧教师','晚辅教师','active')"
+    )
+    connection.execute(
+        "INSERT INTO student (student_id,name,status) VALUES ('S-V8','旧学生','active')"
+    )
+    connection.execute(
+        "INSERT INTO student_teacher_assignment "
+        "(assignment_id,student_id,teacher_id,role,start_date,status) "
+        "VALUES ('STA-V8','S-V8','T-V8','primary','2026-09-01','active')"
+    )
+    connection.execute("PRAGMA user_version = 8")
+    connection.commit()
+    connection.close()
+
+    engine = build_engine(f"sqlite+pysqlite:///{path.as_posix()}")
+    initialize_database(engine)
+    inspector = inspect(engine)
+    assert {"origin", "source_enrollment_id"} <= {
+        column["name"] for column in inspector.get_columns("student_teacher_assignment")
+    }
+    invitation_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("guardian_invitation")
+    }
+    assert invitation_columns["max_uses"]["default"] is None
+    assert any(
+        tuple(item["constrained_columns"]) == ("source_enrollment_id",)
+        and item["referred_table"] == "enrollment"
+        for item in inspector.get_foreign_keys("student_teacher_assignment")
+    )
+    assert any(
+        item["name"] == "uq_student_teacher_active_role" and item["unique"]
+        for item in inspector.get_indexes("student_teacher_assignment")
+    )
+    with engine.begin() as upgraded:
+        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 9
+        row = upgraded.exec_driver_sql(
+            "SELECT assignment_id,origin,source_enrollment_id "
+            "FROM student_teacher_assignment WHERE assignment_id='STA-V8'"
+        ).one()
+        assert tuple(row) == ("STA-V8", "manual", None)
+        with pytest.raises(IntegrityError):
+            upgraded.exec_driver_sql(
+                "INSERT INTO student_teacher_assignment "
+                "(assignment_id,student_id,teacher_id,role,start_date,status) "
+                "VALUES ('STA-DUP','S-V8','T-V8','primary','2026-09-02','active')"
+            )
     engine.dispose()
