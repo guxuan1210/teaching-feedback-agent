@@ -290,6 +290,8 @@ class FamilyConversation(Base):
     channel: Mapped[str] = mapped_column(String, nullable=False)
     channel_conversation_id: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
+    teacher_notification_status: Mapped[str | None] = mapped_column(String)
+    teacher_notification_error: Mapped[str | None] = mapped_column(String)
     last_message_at: Mapped[str] = mapped_column(String, nullable=False, default=_utcnow)
     created_at: Mapped[str] = mapped_column(String, nullable=False, default=_utcnow)
     updated_at: Mapped[str] = mapped_column(

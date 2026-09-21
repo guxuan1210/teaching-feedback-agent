@@ -478,6 +478,8 @@ CREATE TABLE IF NOT EXISTS family_conversation (
     channel                TEXT NOT NULL,
     channel_conversation_id TEXT NOT NULL,
     status                 TEXT NOT NULL DEFAULT 'active',
+    teacher_notification_status TEXT,
+    teacher_notification_error TEXT,
     last_message_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     created_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

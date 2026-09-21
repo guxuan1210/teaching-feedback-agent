@@ -131,6 +131,9 @@ def record_bot_reply_batch(
         ))
     db.add_all(rows)
     if waiting_teacher:
+        if conversation.status != "waiting_teacher":
+            conversation.teacher_notification_status = "pending"
+            conversation.teacher_notification_error = None
         conversation.status = "waiting_teacher"
         conversation.updated_at = _now()
     try:
@@ -147,6 +150,9 @@ def request_teacher_reply(
     row = db.get(FamilyConversation, conversation_id)
     if row is None:
         raise ValueError("家庭会话不存在")
+    if row.status != "waiting_teacher":
+        row.teacher_notification_status = "pending"
+        row.teacher_notification_error = None
     row.status = "waiting_teacher"
     row.updated_at = _now()
     db.commit()

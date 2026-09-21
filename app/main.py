@@ -1,4 +1,8 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import asyncio
+import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -27,6 +31,17 @@ from app.sessions.routes import router as sessions_router
 from app.wecom.routes import router as wecom_router
 from app.wecom.config import WecomConfig, load_wecom_config_from_dotenv
 from app.wecom.gateway import WecomGateway
+from app.wecom_customer.client import WecomCustomerClient
+from app.wecom_customer.config import WecomCustomerConfig, load_customer_config
+from app.wecom_customer.crypto import WecomCallbackCrypto
+from app.wecom_customer.handler import process_parent_text
+from app.wecom_customer.routes import create_router as create_customer_router
+from app.family.models import FamilyConversation, FamilyMessage
+from app.family.storage import LocalImageStore
+from app.family.relationships import sync_head_teacher_assignments
+from app.family import conversations as family_conversations
+from sqlalchemy import select
+from sqlalchemy import update
 from app.core.database import (
     build_engine,
     build_session_factory,
@@ -39,6 +54,7 @@ from app.core.database import (
 DEFAULT_DATABASE_URL = "sqlite+pysqlite:///data/teaching_demo.db"
 DEFAULT_SECRET_KEY = "dev-secret-key-change-me"
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -49,11 +65,16 @@ def create_app(
     rewriter=None,
     wecom_config: WecomConfig | None = None,
     wecom_client_factory=None,
+    image_store=None,
+    wecom_customer_config: WecomCustomerConfig | None = None,
+    wecom_customer_client=None,
+    callback_crypto=None,
 ) -> FastAPI:
     if database_url is None:
         database_url = DEFAULT_DATABASE_URL
 
     gateway = None
+    customer_client = wecom_customer_client
 
     @asynccontextmanager
     async def lifespan(_application: FastAPI):
@@ -64,6 +85,12 @@ def create_app(
         finally:
             if gateway is not None:
                 await gateway.stop()
+            if customer_client is not None:
+                close = getattr(customer_client, "close", None)
+                if close is not None:
+                    result = close()
+                    if asyncio.iscoroutine(result):
+                        await result
 
     application = FastAPI(title="教学反馈数据采集 Demo", lifespan=lifespan)
     application.state.secret_key = secret_key or DEFAULT_SECRET_KEY
@@ -81,6 +108,18 @@ def create_app(
     seed_admin(engine)
     application.state.engine = engine
     application.state.session_factory = build_session_factory(engine)
+    with application.state.session_factory() as db:
+        sync_head_teacher_assignments(db)
+        # Resume failed notification delivery after a process restart. The
+        # external API may have accepted the send immediately before a crash,
+        # so this is intentionally at-least-once and may produce a duplicate.
+        db.execute(update(FamilyConversation).where(
+            FamilyConversation.teacher_notification_status == "sending"
+        ).values(
+            teacher_notification_status="failed",
+            teacher_notification_error="RecoveredAfterRestart",
+        ))
+        db.commit()
     application.state.ai_report_generator = (
         ai_report_generator
         if ai_report_generator is not None
@@ -105,6 +144,111 @@ def create_app(
         )
     application.state.wecom_gateway = gateway
     application.state.wecom_config = resolved_wecom_config
+    customer_config = wecom_customer_config or load_customer_config(os.environ)
+    if customer_config.enabled and customer_client is None:
+        customer_client = WecomCustomerClient(customer_config)
+    if customer_config.enabled and callback_crypto is None:
+        callback_crypto = WecomCallbackCrypto(
+            customer_config.corp_id, customer_config.callback_token,
+            customer_config.callback_aes_key,
+        )
+    if image_store is None:
+        image_store = LocalImageStore(
+            resolved_wecom_config.media_root,
+            max_bytes=resolved_wecom_config.media_max_bytes,
+        )
+    application.state.image_store = image_store
+    application.state.wecom_customer_config = customer_config
+    application.state.wecom_customer_client = customer_client
+    application.state.callback_crypto = callback_crypto
+    application.state.wecom_customer_last_error_at = None
+
+    async def notify_waiting_teacher(conversation_id: str, inbound_message_id: str) -> None:
+        active_gateway = application.state.wecom_gateway
+        if active_gateway is None:
+            return
+        with application.state.session_factory() as db:
+            inbound = db.get(FamilyMessage, inbound_message_id)
+            conversation = db.get(FamilyConversation, conversation_id)
+            if (
+                inbound is None or inbound.direction != "inbound"
+                or inbound.sender_type != "guardian"
+                or conversation is None or inbound.conversation_id != conversation_id
+                or conversation.status != "waiting_teacher"
+                or conversation.teacher_notification_status not in ("pending", "failed")
+                or not family_conversations.outbound_for_inbound(db, inbound_message_id)
+            ):
+                return
+            conversation.teacher_notification_status = "sending"
+            conversation.teacher_notification_error = None
+            db.commit()
+        try:
+            delivered = await active_gateway.notify_teacher(conversation_id)
+        except Exception as exc:  # noqa: BLE001 - never log family text or credentials
+            logger.warning("WeCom family teacher notification failed type=%s", type(exc).__name__)
+            delivered = False
+            error = type(exc).__name__
+        else:
+            error = None if delivered else "DeliveryUnavailable"
+            if not delivered:
+                logger.warning("WeCom family teacher notification was not delivered")
+        with application.state.session_factory() as db:
+            conversation = db.get(FamilyConversation, conversation_id)
+            if conversation is not None and conversation.teacher_notification_status == "sending":
+                conversation.teacher_notification_status = "sent" if delivered else "failed"
+                conversation.teacher_notification_error = None if delivered else error
+                db.commit()
+
+    async def process_customer_token(token: str) -> None:
+        if customer_client is None:
+            raise RuntimeError("微信客服客户端未配置")
+        try:
+            batch = customer_client.sync_messages(None, token)
+            while True:
+                for message in batch.messages:
+                    if message.get("msgtype") != "text":
+                        continue
+                    external = message.get("external_userid") or message.get("external_user_id") or ""
+                    message_id = message.get("msgid") or ""
+                    text = (message.get("text") or {}).get("content", "")
+                    if not external or not message_id:
+                        continue
+                    with application.state.session_factory() as db:
+                        process_parent_text(
+                            db, customer_client, secret_key=application.state.secret_key,
+                            external_user_id=external, message_id=message_id, text=text,
+                            image_store=application.state.image_store,
+                            assistant_provider=application.state.chat_provider,
+                        )
+                        inbound = db.scalar(select(FamilyMessage).where(
+                            FamilyMessage.channel_message_id == message_id,
+                            FamilyMessage.direction == "inbound",
+                            FamilyMessage.sender_type == "guardian",
+                        ))
+                        conversation_id = inbound.conversation_id if inbound else None
+                        inbound_message_id = inbound.message_id if inbound else None
+                        failed_delivery = bool(inbound and any(
+                            row.status == "failed"
+                            for row in family_conversations.outbound_for_inbound(
+                                db, inbound.message_id
+                            )
+                        ))
+                    if failed_delivery:
+                        application.state.wecom_customer_last_error_at = datetime.now(timezone.utc).isoformat()
+                    if conversation_id and inbound_message_id:
+                        await notify_waiting_teacher(conversation_id, inbound_message_id)
+                if not batch.has_more:
+                    break
+                batch = customer_client.sync_messages(batch.next_cursor, token)
+        except Exception as exc:  # noqa: BLE001 - callback responses are sanitized
+            application.state.wecom_customer_last_error_at = datetime.now(timezone.utc).isoformat()
+            logger.warning("WeCom customer sync failed type=%s", type(exc).__name__)
+            raise
+
+    application.state.process_wecom_customer_token = process_customer_token
+    application.include_router(create_customer_router(
+        customer_config, callback_crypto or object(), process_customer_token,
+    ))
 
     application.include_router(auth_router)
     application.include_router(catalog_router)
@@ -135,6 +279,16 @@ def create_app(
             "last_error_at": active_gateway.last_error_at if active_gateway else None,
         }
 
+    @application.get("/health/wecom-customer")
+    def wecom_customer_health():
+        enabled = application.state.wecom_customer_config.enabled
+        return {
+            "enabled": enabled,
+            "ready": bool(enabled and application.state.wecom_customer_client is not None
+                           and application.state.callback_crypto is not None),
+            "last_error_at": application.state.wecom_customer_last_error_at,
+        }
+
     return application
 
 
@@ -144,9 +298,13 @@ def create_default_app(
 ) -> FastAPI:
     """Create the default runtime app with model settings from ``.env``."""
     config = load_model_config_from_dotenv(env_file)
+    from dotenv import dotenv_values
+    env_values = {key: value for key, value in dotenv_values(env_file).items() if value is not None}
+    env_values.update(os.environ)
     kwargs = {
         "database_url": database_url,
         "wecom_config": load_wecom_config_from_dotenv(env_file),
+        "wecom_customer_config": load_customer_config(env_values),
     }
     if config is not None:
         kwargs.update(
