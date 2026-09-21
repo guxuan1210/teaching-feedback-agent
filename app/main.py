@@ -152,6 +152,7 @@ def create_app(
             client_factory=wecom_client_factory,
             generation_coordinator=application.state.generation_coordinator,
             image_store=image_store,
+            customer_client=customer_client,
         )
     application.state.wecom_gateway = gateway
     application.state.wecom_config = resolved_wecom_config
