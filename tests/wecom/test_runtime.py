@@ -141,6 +141,71 @@ def test_application_lifespan_starts_and_stops_enabled_gateway(database_url):
     assert fake.disconnected is True
 
 
+def test_application_passes_injected_image_store_to_gateway(database_url):
+    image_store = object()
+    application = create_app(
+        database_url=database_url,
+        wecom_config=WecomConfig(True, "bot", "secret", None),
+        wecom_client_factory=lambda _config: FakeClient(),
+        image_store=image_store,
+    )
+    assert application.state.wecom_gateway.image_store is image_store
+
+
+def test_customer_client_closes_when_gateway_start_fails(database_url):
+    from app.wecom_customer.config import WecomCustomerConfig
+
+    class Customer:
+        closed = False
+        def close(self):
+            self.closed = True
+
+    customer = Customer()
+    application = create_app(
+        database_url=database_url,
+        wecom_config=WecomConfig(True, "bot", "secret", None),
+        wecom_client_factory=lambda _config: FakeClient(),
+        wecom_customer_config=WecomCustomerConfig(False, None, None, None, None, None),
+        wecom_customer_client=customer,
+    )
+
+    async def fail_start():
+        raise RuntimeError("start failed")
+
+    application.state.wecom_gateway.start = fail_start
+    with pytest.raises(RuntimeError, match="start failed"):
+        with TestClient(application):
+            pass
+    assert customer.closed is True
+
+
+def test_customer_client_closes_when_gateway_stop_fails(database_url):
+    from app.wecom_customer.config import WecomCustomerConfig
+
+    class Customer:
+        closed = False
+        def close(self):
+            self.closed = True
+
+    customer = Customer()
+    application = create_app(
+        database_url=database_url,
+        wecom_config=WecomConfig(True, "bot", "secret", None),
+        wecom_client_factory=lambda _config: FakeClient(),
+        wecom_customer_config=WecomCustomerConfig(False, None, None, None, None, None),
+        wecom_customer_client=customer,
+    )
+
+    async def fail_stop():
+        raise RuntimeError("stop failed")
+
+    application.state.wecom_gateway.stop = fail_stop
+    with pytest.raises(RuntimeError, match="stop failed"):
+        with TestClient(application):
+            pass
+    assert customer.closed is True
+
+
 def test_gateway_handles_expired_scope_card_click(engine):
     from app.core.database import build_session_factory
 

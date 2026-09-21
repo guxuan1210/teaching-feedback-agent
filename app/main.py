@@ -78,19 +78,23 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_application: FastAPI):
-        if gateway is not None:
-            await gateway.start()
+        gateway_started = False
         try:
+            if gateway is not None:
+                await gateway.start()
+                gateway_started = True
             yield
         finally:
-            if gateway is not None:
-                await gateway.stop()
-            if customer_client is not None:
-                close = getattr(customer_client, "close", None)
-                if close is not None:
-                    result = close()
-                    if asyncio.iscoroutine(result):
-                        await result
+            try:
+                if gateway is not None and gateway_started:
+                    await gateway.stop()
+            finally:
+                if customer_client is not None:
+                    close = getattr(customer_client, "close", None)
+                    if close is not None:
+                        result = close()
+                        if asyncio.iscoroutine(result):
+                            await result
 
     application = FastAPI(title="教学反馈数据采集 Demo", lifespan=lifespan)
     application.state.secret_key = secret_key or DEFAULT_SECRET_KEY
@@ -133,6 +137,11 @@ def create_app(
     )
     application.state.generation_coordinator = GenerationCoordinator()
     resolved_wecom_config = wecom_config or WecomConfig(False, None, None, None)
+    if image_store is None:
+        image_store = LocalImageStore(
+            resolved_wecom_config.media_root,
+            max_bytes=resolved_wecom_config.media_max_bytes,
+        )
     if resolved_wecom_config.enabled:
         gateway = WecomGateway(
             config=resolved_wecom_config,
@@ -141,6 +150,7 @@ def create_app(
             binding_secret=application.state.secret_key,
             client_factory=wecom_client_factory,
             generation_coordinator=application.state.generation_coordinator,
+            image_store=image_store,
         )
     application.state.wecom_gateway = gateway
     application.state.wecom_config = resolved_wecom_config
@@ -151,11 +161,6 @@ def create_app(
         callback_crypto = WecomCallbackCrypto(
             customer_config.corp_id, customer_config.callback_token,
             customer_config.callback_aes_key,
-        )
-    if image_store is None:
-        image_store = LocalImageStore(
-            resolved_wecom_config.media_root,
-            max_bytes=resolved_wecom_config.media_max_bytes,
         )
     application.state.image_store = image_store
     application.state.wecom_customer_config = customer_config
