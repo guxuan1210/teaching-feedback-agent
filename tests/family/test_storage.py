@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -128,6 +129,24 @@ def test_symlink_escape_is_rejected(tmp_path, method):
     store = LocalImageStore(root, quarantine_root=tmp_path / "q")
     with pytest.raises(ImageStorageError):
         getattr(store, method)("link.jpg")
+
+
+def test_save_rejects_symlink_parent_escape(tmp_path):
+    root, outside = tmp_path / "images", tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    try:
+        (root / "student").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        if __import__("os").name == "nt":
+            result = subprocess.run(["cmd", "/c", "mklink", "/J", str(root / "student"), str(outside)], capture_output=True)
+            if result.returncode != 0:
+                pytest.skip("symlinks and directory junctions are unavailable")
+        else:
+            pytest.skip("symlinks are unavailable")
+    with pytest.raises(ImageStorageError):
+        LocalImageStore(root).save("student", "image", [IMAGES[0][2]])
+    assert list(outside.iterdir()) == []
 
 
 def test_open_rejects_absolute_and_parent_paths(tmp_path):

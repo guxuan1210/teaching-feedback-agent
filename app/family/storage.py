@@ -132,9 +132,18 @@ class LocalImageStore:
             mime_type, extension = identified
             relative = f"{student_id}/{moment:%Y/%m}/{image_id}.{extension}"
             destination = self.root / relative
+            # Check before mkdir as well: otherwise an existing student/year symlink
+            # could cause directory creation outside root even if replace is rejected.
+            self._safe_path(self.root, relative, must_exist=False)
             destination.parent.mkdir(parents=True, exist_ok=True)
+            # Resolve every component after creating parents so symlinked directories
+            # cannot redirect the final write outside the configured storage root.
+            destination = self._safe_path(self.root, relative, must_exist=False)
             if destination.exists() or destination.is_symlink():
                 raise ImageStorageError("image path already exists")
+            # Revalidate immediately before replacement in case a parent changed while
+            # the streamed file was being written.
+            destination = self._safe_path(self.root, relative, must_exist=False)
             os.replace(temp_path, destination)
             return StoredImage(relative, mime_type, extension, size, digest.hexdigest())
         except Exception:
