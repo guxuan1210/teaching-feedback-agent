@@ -110,6 +110,54 @@ def _add_missing_columns(engine: Engine) -> None:
             conn.exec_driver_sql("ALTER TABLE student_image ADD COLUMN quarantine_path VARCHAR")
 
 
+def _migrate_student_image_quarantine_check(engine: Engine) -> None:
+    """Rebuild v9 image storage to enforce the v10 quarantine-state invariant."""
+    with engine.connect() as conn:
+        table_sql = conn.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='student_image'"
+        ).scalar_one_or_none()
+        conn.commit()
+        if table_sql is None or "quarantine_path IS NOT NULL" in table_sql:
+            return
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        conn.commit()
+        try:
+            with conn.begin():
+                conn.exec_driver_sql("DROP TABLE IF EXISTS student_image_new")
+                conn.exec_driver_sql(
+                    "CREATE TABLE student_image_new ("
+                    "image_id TEXT PRIMARY KEY, "
+                    "student_id TEXT NOT NULL REFERENCES student(student_id), "
+                    "uploaded_by_teacher_id TEXT NOT NULL REFERENCES teacher(teacher_id), "
+                    "source_message_id TEXT NOT NULL, source_position INTEGER NOT NULL, "
+                    "caption TEXT, mime_type TEXT NOT NULL, extension TEXT NOT NULL, "
+                    "byte_size INTEGER NOT NULL, sha256 TEXT NOT NULL, storage_path TEXT NOT NULL, "
+                    "status TEXT NOT NULL DEFAULT 'active', "
+                    "uploaded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), "
+                    "deleted_at TEXT, deleted_by_teacher_id TEXT REFERENCES teacher(teacher_id), "
+                    "quarantine_path TEXT, UNIQUE(source_message_id, source_position), "
+                    "CHECK(status IN ('active','deleted')), "
+                    "CHECK((status='active' AND deleted_at IS NULL AND deleted_by_teacher_id IS NULL AND quarantine_path IS NULL) "
+                    "OR (status='deleted' AND deleted_at IS NOT NULL AND deleted_by_teacher_id IS NOT NULL AND quarantine_path IS NOT NULL))"
+                    ")"
+                )
+                conn.exec_driver_sql(
+                    "INSERT INTO student_image_new (image_id,student_id,uploaded_by_teacher_id,source_message_id,source_position,caption,mime_type,extension,byte_size,sha256,storage_path,status,uploaded_at,deleted_at,deleted_by_teacher_id,quarantine_path) "
+                    "SELECT image_id,student_id,uploaded_by_teacher_id,source_message_id,source_position,caption,mime_type,extension,byte_size,sha256,storage_path,status,uploaded_at,deleted_at,deleted_by_teacher_id, "
+                    "CASE WHEN status='deleted' AND quarantine_path IS NULL THEN 'legacy-unavailable/' || image_id ELSE quarantine_path END "
+                    "FROM student_image"
+                )
+                conn.exec_driver_sql("DROP TABLE student_image")
+                conn.exec_driver_sql("ALTER TABLE student_image_new RENAME TO student_image")
+                conn.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS ix_student_image_student_status_uploaded "
+                    "ON student_image(student_id, status, uploaded_at)"
+                )
+        finally:
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+            conn.commit()
+
+
 def _migrate_student_teacher_assignments(engine: Engine) -> None:
     """Rebuild legacy assignment storage with source checks and safe uniqueness."""
     today = datetime.now(timezone.utc).date().isoformat()
@@ -332,6 +380,7 @@ def initialize_database(engine: Engine) -> None:
     _import_all_models()
     Base.metadata.create_all(engine)
     _add_missing_columns(engine)
+    _migrate_student_image_quarantine_check(engine)
     _migrate_student_teacher_assignments(engine)
     _backfill_parent_message(engine)
     _backfill_teacher_chat_state(engine)

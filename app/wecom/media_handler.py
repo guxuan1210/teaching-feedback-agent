@@ -110,6 +110,7 @@ def process_teacher_media(
     wecom_user_id: str,
     parsed: ParsedMediaMessage,
     payloads: list[bytes],
+    pending_media_minutes: int = 15,
 ) -> MediaBotReply:
     del binding_secret  # Teacher identity is established by the persisted binding.
     binding = db.get(TeacherWecomBinding, wecom_user_id)
@@ -118,7 +119,7 @@ def process_teacher_media(
     result = archive_teacher_images(
         db, store, teacher_id=binding.teacher_id,
         source_message_id=parsed.message_id, caption=parsed.caption,
-        payloads=payloads,
+        payloads=payloads, pending_media_minutes=pending_media_minutes,
     )
     if result.status == "archived":
         from app.catalog.models import Student

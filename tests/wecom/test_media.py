@@ -4,6 +4,7 @@ import pytest
 
 from app.catalog.models import Student, Teacher
 from app.core.database import build_session_factory
+from datetime import datetime
 from app.family.models import StudentTeacherAssignment, StudentImage, PendingMediaAssignment
 from app.wecom.config import WecomConfig, load_wecom_config
 from app.wecom.gateway import WecomGateway
@@ -88,7 +89,7 @@ def media_gateway(engine, tmp_path):
         db.commit()
     fake = FakeClient()
     gateway = WecomGateway(
-        config=WecomConfig(True, "bot", "secret", None, media_root=tmp_path / "media"),
+        config=WecomConfig(True, "bot", "secret", None, media_root=tmp_path / "media", pending_media_minutes=9),
         session_factory=build_session_factory(engine), chat_provider=None,
         binding_secret="secret", client_factory=lambda _: fake,
     )
@@ -133,7 +134,10 @@ def test_image_without_student_sends_choice_card(media_gateway, db_session):
     assert card["main_title"]["title"] == "请选择图片所属学生"
     button = card["button_list"][0]
     assert button["key"].startswith("media_")
-    assert db_session.query(PendingMediaAssignment).filter_by(source_message_id="M2").one()
+    pending = db_session.query(PendingMediaAssignment).filter_by(source_message_id="M2").one()
+    created = datetime.fromisoformat(pending.created_at)
+    expires = datetime.fromisoformat(pending.expires_at)
+    assert abs((expires - created).total_seconds() - 9 * 60) < 3
 
 
 def test_media_choice_click_archives_pending_image(media_gateway, db_session):

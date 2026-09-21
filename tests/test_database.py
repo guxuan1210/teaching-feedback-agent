@@ -282,6 +282,42 @@ def test_v9_database_adds_quarantine_path_without_losing_images(tmp_path):
     engine.dispose()
 
 
+def test_v9_migration_preserves_deleted_images_and_enforces_quarantine_state(tmp_path):
+    path = tmp_path / "v9-deleted-image.db"
+    schema = Path("db/schema.sql").read_text(encoding="utf-8")
+    legacy_schema = schema.replace("    quarantine_path TEXT,\n", "").replace(
+        " AND quarantine_path IS NULL", ""
+    ).replace(" AND quarantine_path IS NOT NULL", "")
+    connection = sqlite3.connect(path)
+    connection.executescript(legacy_schema)
+    connection.execute("INSERT INTO teacher (teacher_id,name,role,status) VALUES ('T-MIG','迁移教师','管理员','active')")
+    connection.execute("INSERT INTO student (student_id,name,status) VALUES ('S-MIG','迁移学生','active')")
+    connection.execute(
+        "INSERT INTO student_image (image_id,student_id,uploaded_by_teacher_id,source_message_id,source_position,mime_type,extension,byte_size,sha256,storage_path,status,deleted_at,deleted_by_teacher_id) "
+        "VALUES ('IMG-DEL','S-MIG','T-MIG','MSG-DEL',0,'image/png','png',12,?, 'S-MIG/x.png','deleted','2026-09-20T00:00:00Z','T-MIG')",
+        ("a" * 64,),
+    )
+    connection.execute("PRAGMA user_version = 9")
+    connection.commit(); connection.close()
+    engine = build_engine(f"sqlite+pysqlite:///{path.as_posix()}")
+    initialize_database(engine)
+    with engine.begin() as migrated:
+        assert migrated.exec_driver_sql(
+            "SELECT status,quarantine_path FROM student_image WHERE image_id='IMG-DEL'"
+        ).one() == ("deleted", "legacy-unavailable/IMG-DEL")
+        assert "ix_student_image_student_status_uploaded" in {
+            row[1] for row in migrated.exec_driver_sql("PRAGMA index_list(student_image)")
+        }
+        assert {row[2] for row in migrated.exec_driver_sql("PRAGMA foreign_key_list(student_image)")} == {"student", "teacher"}
+        with pytest.raises(IntegrityError):
+            migrated.exec_driver_sql(
+                "INSERT INTO student_image (image_id,student_id,uploaded_by_teacher_id,source_message_id,source_position,mime_type,extension,byte_size,sha256,storage_path,status,deleted_at,deleted_by_teacher_id) "
+                "VALUES ('IMG-BAD','S-MIG','T-MIG','MSG-BAD',0,'image/png','png',12,?, 'S-MIG/y.png','deleted','2026-09-20T00:00:00Z','T-MIG')",
+                ("b" * 64,),
+            )
+    engine.dispose()
+
+
 def test_v8_family_database_migrates_assignments_without_data_loss(tmp_path):
     path = tmp_path / "v8-family.db"
     schema = Path("db/schema.sql").read_text(encoding="utf-8")

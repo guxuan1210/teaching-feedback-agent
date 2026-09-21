@@ -152,8 +152,11 @@ def _archive_staged(db, store, *, teacher_id, student_id, source, caption, paths
 
 
 def archive_teacher_images(db: Session, store: LocalImageStore, *, teacher_id: str, source_message_id: str,
-                           caption: str, payloads, now: datetime | None = None) -> MediaArchiveResult:
+                           caption: str, payloads, now: datetime | None = None,
+                           pending_media_minutes: int = PENDING_MINUTES) -> MediaArchiveResult:
     moment = _moment(now)
+    if isinstance(pending_media_minutes, bool) or not isinstance(pending_media_minutes, int) or pending_media_minutes < 1:
+        raise ValueError("pending_media_minutes must be a positive integer")
     if not isinstance(source_message_id, str) or not _SAFE_MESSAGE.fullmatch(source_message_id):
         return _result("rejected", "消息标识无效")
     teacher = db.get(Teacher, teacher_id)
@@ -189,7 +192,7 @@ def archive_teacher_images(db: Session, store: LocalImageStore, *, teacher_id: s
             _cleanup(store, paths)
     row = PendingMediaAssignment(teacher_id=teacher_id, source_message_id=source_message_id, caption=note,
         media_json=json.dumps(metadata), choices_json=json.dumps([c.__dict__ for c in choices], ensure_ascii=False),
-        temporary_paths_json=json.dumps(paths), expires_at=(moment + timedelta(minutes=PENDING_MINUTES)).isoformat(), status="pending")
+        temporary_paths_json=json.dumps(paths), expires_at=(moment + timedelta(minutes=pending_media_minutes)).isoformat(), status="pending")
     try:
         db.add(row); db.commit()
     except Exception:
@@ -206,7 +209,9 @@ def confirm_pending_media(db: Session, store: LocalImageStore, *, teacher_id: st
         pending.status = "expired"; pending.temporary_paths_json = "[]"; db.commit(); _cleanup(store, paths)
         return _result("rejected", "待确认图片已过期")
     choices = {c["student_id"] for c in json.loads(pending.choices_json)}
-    if student_id not in choices or not teacher_can_access_student(db, teacher_id, student_id, moment.date()):
+    if student_id not in choices:
+        return _result("rejected", "所选学生不在待选名单中")
+    if not teacher_can_access_student(db, teacher_id, student_id, moment.date()):
         _cleanup(store, paths); pending.temporary_paths_json = "[]"; pending.status = "expired"; db.commit()
         return _result("rejected", "所选学生无权限")
     try:

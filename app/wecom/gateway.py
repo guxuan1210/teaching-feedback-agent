@@ -349,6 +349,7 @@ class WecomGateway:
                         return process_teacher_media(
                             db, self.image_store, binding_secret=self.binding_secret,
                             wecom_user_id=user_id, parsed=parsed, payloads=payloads,
+                            pending_media_minutes=self.config.pending_media_minutes,
                         )
 
                 result = await asyncio.to_thread(archive)

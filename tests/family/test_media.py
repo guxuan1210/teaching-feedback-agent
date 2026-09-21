@@ -101,6 +101,39 @@ def test_confirmation_rechecks_teacher_scope_and_preserves_positions(media_env):
     assert [row.source_position for row in db.scalars(select(StudentImage).where(StudentImage.source_message_id == "MSG-confirm").order_by(StudentImage.source_position))] == [0, 1]
 
 
+def test_invalid_student_choice_keeps_pending_media_available_for_retry(media_env):
+    db, store, *_ = media_env
+    archive(db, store, "", source="MSG-retry")
+    pending = db.query(PendingMediaAssignment).filter_by(source_message_id="MSG-retry").one()
+    paths = __import__("json").loads(pending.temporary_paths_json)
+
+    rejected = confirm_pending_media(
+        db, store, teacher_id="T1", pending_id=pending.pending_id,
+        student_id="S999", now=NOW,
+    )
+
+    assert rejected.status == "rejected"
+    assert pending.status == "pending"
+    assert pending.temporary_paths_json != "[]"
+    assert all((store.root / path).is_file() for path in paths)
+    accepted = confirm_pending_media(
+        db, store, teacher_id="T1", pending_id=pending.pending_id,
+        student_id="S1", now=NOW,
+    )
+    assert accepted.status == "archived"
+
+
+def test_pending_media_expiry_uses_configured_duration(media_env):
+    db, store, *_ = media_env
+    result = archive_teacher_images(
+        db, store, teacher_id="T1", source_message_id="MSG-configured-ttl",
+        caption="", payloads=(PNG,), now=NOW, pending_media_minutes=9,
+    )
+    pending = db.query(PendingMediaAssignment).filter_by(source_message_id="MSG-configured-ttl").one()
+    assert result.status == "needs_student"
+    assert datetime.fromisoformat(pending.expires_at) == NOW + timedelta(minutes=9)
+
+
 def test_expiry_removes_temporary_media(media_env):
     db, store, *_ = media_env
     archive(db, store, "", source="MSG-expire")
