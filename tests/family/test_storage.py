@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 
@@ -84,6 +85,37 @@ def test_quarantine_restore_and_remove_use_isolated_root(tmp_path):
     qpath = store.quarantine(saved.relative_path)
     store.remove_quarantined(qpath)
     assert not (quarantine / qpath).exists()
+
+
+def test_quarantine_writes_through_original_exclusive_file_handle(tmp_path, monkeypatch):
+    root, quarantine = tmp_path / "images", tmp_path / "quarantine"
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"keep outside unchanged")
+    store = LocalImageStore(root, quarantine_root=quarantine)
+    saved = store.save("s", "i", [IMAGES[0][2]])
+    original_open = Path.open
+    injected = False
+
+    def inject_replacement():
+        nonlocal injected
+        if injected:
+            return
+        injected = True
+        reserved = next(quarantine.iterdir())
+        reserved.unlink()
+        os.link(outside, reserved)
+
+    def replace_quarantine_path(path, mode="r", *args, **kwargs):
+        if path.parent == quarantine and mode == "wb" and not injected:
+            inject_replacement()
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", replace_quarantine_path)
+    qpath = store.quarantine(saved.relative_path)
+
+    assert not injected
+    assert outside.read_bytes() == b"keep outside unchanged"
+    assert (quarantine / qpath).read_bytes() == IMAGES[0][2]
 
 
 def test_restore_never_overwrites_existing_file(tmp_path):

@@ -1,4 +1,10 @@
-"""Safe, local storage for student images."""
+"""Local image storage with containment checks for static path redirection.
+
+The configured storage and quarantine directories must be writable only by the
+application account. Resolve checks reject existing symlinks and junctions, but
+portable Python APIs cannot prevent a hostile local process with write access to
+those directories from racing path changes during filesystem operations.
+"""
 
 from __future__ import annotations
 
@@ -92,6 +98,16 @@ class LocalImageStore:
         return resolved
 
     @staticmethod
+    def _unlink_if_same_file(path: Path, created_stat: os.stat_result) -> None:
+        """Remove a path only while it still names the file this operation created."""
+        try:
+            current = path.stat(follow_symlinks=False)
+            if (current.st_dev, current.st_ino) == (created_stat.st_dev, created_stat.st_ino):
+                path.unlink()
+        except FileNotFoundError:
+            pass
+
+    @staticmethod
     def _identify(prefix: bytes) -> tuple[str, str] | None:
         if prefix.startswith(b"\xff\xd8\xff"):
             return "image/jpeg", "jpg"
@@ -163,16 +179,24 @@ class LocalImageStore:
             destination = self.quarantine_root / name
             try:
                 fd = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                os.close(fd)
             except FileExistsError:
                 continue
+            created_stat = os.fstat(fd)
             try:
-                with source.open("rb") as src, destination.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
+                with source.open("rb") as src:
+                    with os.fdopen(fd, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                current = destination.stat(follow_symlinks=False)
+                if (current.st_dev, current.st_ino) != (created_stat.st_dev, created_stat.st_ino):
+                    raise ImageStorageError("quarantine destination changed during write")
                 source.unlink()
                 return name
             except Exception:
-                destination.unlink(missing_ok=True)
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                self._unlink_if_same_file(destination, created_stat)
                 raise
         raise ImageStorageError("unable to allocate quarantine path")
 
