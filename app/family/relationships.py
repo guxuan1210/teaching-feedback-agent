@@ -60,7 +60,7 @@ def assign_teacher(
     _active_teacher(db, teacher_id)
     if role not in ASSIGNMENT_ROLES:
         raise ValueError("教师关系角色无效")
-    if not isinstance(start_date, date):
+    if isinstance(start_date, datetime) or not isinstance(start_date, date):
         raise ValueError("开始日期无效")
 
     start = start_date.isoformat()
@@ -99,7 +99,7 @@ def revoke_teacher_assignment(
     assignment = db.get(StudentTeacherAssignment, assignment_id)
     if assignment is None:
         raise ValueError("教师关系不存在")
-    if not isinstance(end_date, date):
+    if isinstance(end_date, datetime) or not isinstance(end_date, date):
         raise ValueError("结束日期无效")
     end = end_date.isoformat()
     if end < assignment.start_date:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -221,6 +221,35 @@ def test_assignment_rejects_inactive_subjects_invalid_values_and_overlap(db_sess
     second = assign_teacher(db_session, "S1", "T1", "subject", date(2026, 10, 1))
     with pytest.raises(ValueError, match="结束日期"):
         revoke_teacher_assignment(db_session, second.assignment_id, date(2026, 9, 30))
+
+
+def test_assign_teacher_rejects_datetime_without_writing(db_session):
+    _teacher(db_session, "T1")
+    _student(db_session, "S1")
+
+    with pytest.raises(ValueError, match="开始日期"):
+        assign_teacher(
+            db_session, "S1", "T1", "primary", datetime(2026, 9, 21, 8, 30)
+        )
+
+    assert db_session.query(StudentTeacherAssignment).count() == 0
+
+
+def test_revoke_teacher_assignment_rejects_datetime_without_modifying(db_session):
+    _teacher(db_session, "T1")
+    _student(db_session, "S1")
+    assignment = assign_teacher(
+        db_session, "S1", "T1", "primary", date(2026, 9, 1)
+    )
+
+    with pytest.raises(ValueError, match="结束日期"):
+        revoke_teacher_assignment(
+            db_session, assignment.assignment_id, datetime(2026, 9, 21, 8, 30)
+        )
+
+    db_session.refresh(assignment)
+    assert assignment.status == "active"
+    assert assignment.end_date is None
 
 
 def test_revoked_assignment_history_still_prevents_overlapping_interval(db_session):
