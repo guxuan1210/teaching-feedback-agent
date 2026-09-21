@@ -181,6 +181,32 @@ def test_sync_ignores_historical_enrollment(db_session):
     assert db_session.query(StudentTeacherAssignment).count() == 0
 
 
+def test_sync_rejects_datetime_effective_date_without_writing(db_session):
+    _teacher(db_session, "T1")
+    _student(db_session, "S1")
+    db_session.add(
+        Class(
+            class_id="C1", name="一班", class_type="daily",
+            head_teacher_id="T1", status="active",
+        )
+    )
+    db_session.commit()
+    db_session.add(
+        Enrollment(
+            student_id="S1", class_id="C1",
+            start_date="2026-09-01", status="active",
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="同步日期"):
+        sync_head_teacher_assignments(
+            db_session, on=datetime(2026, 9, 21, 8, 30)
+        )
+
+    assert db_session.query(StudentTeacherAssignment).count() == 0
+
+
 def test_teacher_permission_honors_inclusive_date_boundaries_and_revocation(db_session):
     teacher = _teacher(db_session, "T1")
     student = _student(db_session, "S1")

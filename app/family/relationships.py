@@ -115,6 +115,8 @@ def revoke_teacher_assignment(
 
 def sync_head_teacher_assignments(db: Session, on: date | None = None) -> int:
     """Reconcile class-derived primary assignments with the active roster."""
+    if on is not None and (isinstance(on, datetime) or not isinstance(on, date)):
+        raise ValueError("同步日期无效")
     effective_date = on or date.today()
     effective = effective_date.isoformat()
     rows = db.execute(
