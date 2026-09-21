@@ -18,6 +18,15 @@ class Provider:
         return self.answer_text
 
 
+class RecordingCustomer:
+    def __init__(self):
+        self.sent = []
+
+    def send_text(self, external_user_id, content):
+        self.sent.append((external_user_id, content))
+        return f"OUT-{len(self.sent)}"
+
+
 def _conversation(db_session, student):
     guardian = Guardian(name="家长", relationship_type="mother")
     db_session.add(guardian)
@@ -402,3 +411,65 @@ def test_replay_refuses_original_student_after_relationship_revocation(db_sessio
         .filter_by(channel_message_id="Q-REVOKED-REPLAY").scalar(),
         direction="outbound",
     ).count() == 0
+
+
+def test_prebinding_prompts_are_sent_to_customer_without_storing_invite_code(
+    db_session, student, teacher
+):
+    from app.family.invitations import create_guardian_invitation
+
+    teacher.role = "管理员"
+    db_session.commit()
+    _invitation, code = create_guardian_invitation(
+        db_session, student.student_id, teacher.teacher_id,
+        secret_key="test-invitation-secret",
+    )
+    customer = RecordingCustomer()
+    process_parent_text(
+        db_session, customer, secret_key="test-invitation-secret",
+        external_user_id="EXT-PROMPT", message_id="P1", text=code,
+    )
+    process_parent_text(
+        db_session, customer, secret_key="test-invitation-secret",
+        external_user_id="EXT-PROMPT", message_id="P2", text="母亲",
+    )
+    assert customer.sent[0][1].startswith("【机器人回复】请选择身份")
+    assert customer.sent[1][1].startswith("【机器人回复】绑定成功")
+    assert not db_session.query(FamilyMessage).filter(
+        FamilyMessage.content == code
+    ).count()
+
+
+def test_unbound_prompt_is_sent_and_revoked_pending_does_not_raise(
+    db_session, student, teacher
+):
+    from app.family.invitations import create_guardian_invitation
+    from app.family.models import GuardianChannelBinding
+
+    teacher.role = "管理员"
+    db_session.commit()
+    _invitation, code = create_guardian_invitation(
+        db_session, student.student_id, teacher.teacher_id,
+        secret_key="test-invitation-secret",
+    )
+    customer = RecordingCustomer()
+    process_parent_text(
+        db_session, customer, secret_key="test-invitation-secret",
+        external_user_id="EXT-REVOKE", message_id="R1", text="你好",
+    )
+    assert customer.sent[-1][1].startswith("【机器人回复】请先发送管理员")
+    process_parent_text(
+        db_session, customer, secret_key="test-invitation-secret",
+        external_user_id="EXT-REVOKE", message_id="R2", text=code,
+    )
+    binding = db_session.query(GuardianChannelBinding).filter_by(
+        external_user_id="EXT-REVOKE"
+    ).one()
+    binding.status = "revoked"
+    db_session.commit()
+    result = process_parent_text(
+        db_session, customer, secret_key="test-invitation-secret",
+        external_user_id="EXT-REVOKE", message_id="R3", text="母亲",
+    )
+    assert result[0].content.startswith("【机器人回复】请先发送管理员")
+    assert customer.sent[-1][1] == result[0].content

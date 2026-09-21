@@ -47,6 +47,24 @@ def _reply(text: str) -> list[ParentReply]:
     return [ParentReply(text)]
 
 
+def _send_simple(customer, external_user_id: str, replies: list[ParentReply]) -> list[ParentReply]:
+    """Send prompts which cannot yet belong to a guardian/student outbox."""
+    sender = getattr(customer, "send_text", None)
+    if callable(sender):
+        normalized = [
+            reply if reply.content.startswith("【机器人回复】")
+            else ParentReply(f"【机器人回复】{reply.content}", reply.image_path, reply.image_filename, reply.handoff_marker)
+            for reply in replies
+        ]
+        for reply in normalized:
+            try:
+                sender(external_user_id, reply.content)
+            except Exception:
+                continue
+        return normalized
+    return replies
+
+
 def _binding(db: Session, external_user_id: str) -> GuardianChannelBinding:
     row = db.scalar(select(GuardianChannelBinding).where(
         GuardianChannelBinding.channel == "wecom_customer",
@@ -246,7 +264,7 @@ def process_parent_text(
     msg_id = (message_id or "").strip()
     body = (text or "").strip()
     if not external or not msg_id:
-        return _reply("【机器人回复】消息信息不完整，请稍后重试。")
+        return _send_simple(customer, external, _reply("【机器人回复】消息信息不完整，请稍后重试。"))
 
     # A duplicate callback replays the exact saved outbox and retries only rows that
     # have not reached the channel successfully.
@@ -319,21 +337,24 @@ def process_parent_text(
             and pending.get("invitation_id") == invitation.invitation_id
             and pending.get("invitation_message_id") == msg_id
         ):
-            return _reply("请选择身份：父亲、母亲或其他监护人。")
+            return _send_simple(customer, external, _reply("请选择身份：父亲、母亲或其他监护人。"))
         binding.pending_state_json = _dump({
             "step": "awaiting_relationship",
             "invitation_id": invitation.invitation_id,
             "invitation_message_id": msg_id,
         })
         db.commit()
-        return _reply("请选择身份：父亲、母亲或其他监护人。")
+        return _send_simple(customer, external, _reply("请选择身份：父亲、母亲或其他监护人。"))
+
+    if binding.status == "revoked":
+        return _send_simple(customer, external, _reply("请先发送管理员提供的一次性邀请码完成绑定。"))
 
     if binding.status == "active" and guardian is not None and guardian.status == "active":
         active_id = binding.active_student_id
         if active_id and guardian_can_access_student(db, guardian.guardian_id, active_id):
             active_conversation = _conversation(db, guardian.guardian_id, active_id, external)
             if not _record_inbound(db, active_conversation, msg_id, body):
-                return _reply("【机器人回复】这条消息已处理。")
+                return _send_simple(customer, external, _reply("【机器人回复】这条消息已处理。"))
             inbound = db.scalar(select(FamilyMessage).where(
                 FamilyMessage.channel_message_id == msg_id,
                 FamilyMessage.direction == "inbound",
@@ -344,7 +365,7 @@ def process_parent_text(
         relationship = _RELATIONSHIPS.get(body)
         invitation_id = pending.get("invitation_id")
         if relationship is None or not isinstance(invitation_id, str):
-            return _reply("请选择身份：父亲、母亲或其他监护人。")
+            return _send_simple(customer, external, _reply("请选择身份：父亲、母亲或其他监护人。"))
         display_name = (
             getattr(customer, "guardian_name", None)
             or getattr(customer, "name", None)
@@ -359,7 +380,7 @@ def process_parent_text(
         except ValueError:
             binding.pending_state_json = None
             db.commit()
-            return _reply("【机器人回复】邀请码无效、已过期或已使用，请联系老师重新获取。")
+            return _send_simple(customer, external, _reply("【机器人回复】邀请码无效、已过期或已使用，请联系老师重新获取。"))
         binding = db.scalar(select(GuardianChannelBinding).where(
             GuardianChannelBinding.channel == "wecom_customer",
             GuardianChannelBinding.external_user_id == external,
@@ -382,14 +403,16 @@ def process_parent_text(
                     _record_inbound(
                         db, conversation, invitation_message_id, "[邀请码已核销]"
                     )
-        return _reply("【机器人回复】绑定成功。你可以查看最近图片、最近反馈或已定稿周报。")
+        return _send_simple(customer, external, _reply("【机器人回复】绑定成功。你可以查看最近图片、最近反馈或已定稿周报。"))
 
     if binding.status != "active" or guardian is None or guardian.status != "active":
-        return _reply("【机器人回复】请先发送管理员提供的一次性邀请码完成绑定。")
+        return _send_simple(customer, external, _reply("【机器人回复】请先发送管理员提供的一次性邀请码完成绑定。"))
 
     students = list_students_for_guardian(db, guardian.guardian_id)
     pending = _load(binding.pending_state_json)
     if pending.get("step") == "awaiting_student":
+        if "active_conversation" not in locals() or "inbound" not in locals():
+            return _send_simple(customer, external, _choice_prompt(db, guardian.guardian_id))
         # Resolve by ordinal or by an ID present in the freshly authorized list.
         index = None
         if body.isdecimal():
@@ -436,7 +459,7 @@ def process_parent_text(
             binding.pending_state_json = _dump({"step": "awaiting_student"})
             db.commit()
             return _choice_prompt(db, guardian.guardian_id)
-        return _reply("【机器人回复】目前没有可访问的学生，请联系老师。")
+        return _send_simple(customer, external, _reply("【机器人回复】目前没有可访问的学生，请联系老师。"))
 
     deterministic_intent = any(
         token in body for token in ("图片", "反馈", "周报", "请老师回复", "转老师")
