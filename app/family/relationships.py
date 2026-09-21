@@ -68,7 +68,6 @@ def assign_teacher(
             StudentTeacherAssignment.student_id == student_id,
             StudentTeacherAssignment.teacher_id == teacher_id,
             StudentTeacherAssignment.role == role,
-            StudentTeacherAssignment.status == "active",
         )
     ).all()
     if any(_intervals_overlap(row.start_date, row.end_date, start, None) for row in existing):

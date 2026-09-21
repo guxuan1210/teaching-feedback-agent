@@ -123,6 +123,27 @@ def test_assignment_rejects_inactive_subjects_invalid_values_and_overlap(db_sess
         revoke_teacher_assignment(db_session, second.assignment_id, date(2026, 9, 30))
 
 
+def test_revoked_assignment_history_still_prevents_overlapping_interval(db_session):
+    teacher = _teacher(db_session, "T1")
+    student = _student(db_session, "S1")
+    original = assign_teacher(
+        db_session, student.student_id, teacher.teacher_id, "primary", date(2026, 9, 1)
+    )
+    revoke_teacher_assignment(db_session, original.assignment_id, date(2026, 9, 30))
+
+    for overlapping_start in (date(2026, 9, 15), date(2026, 9, 30)):
+        with pytest.raises(ValueError, match="重叠"):
+            assign_teacher(
+                db_session, student.student_id, teacher.teacher_id,
+                "primary", overlapping_start,
+            )
+
+    replacement = assign_teacher(
+        db_session, student.student_id, teacher.teacher_id, "primary", date(2026, 10, 1)
+    )
+    assert replacement.start_date == "2026-10-01"
+
+
 def test_guardian_permissions_require_active_rows_and_return_sorted_unique_students(db_session):
     guardian = Guardian(name="家长", relationship_type="father", status="active")
     db_session.add(guardian)

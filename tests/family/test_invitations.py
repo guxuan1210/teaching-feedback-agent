@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy.sql.dml import Update
 
 from app.catalog.models import Student, Teacher
 from app.family.invitations import (
@@ -158,7 +159,9 @@ def test_existing_binding_is_reused_for_second_child_and_lists_both(db_session):
 def test_existing_binding_rejects_conflicting_identity(db_session):
     _scope(db_session)
     _, code1 = create_guardian_invitation(db_session, "S1", "T1", secret_key=SECRET, now=NOW)
-    _, code2 = create_guardian_invitation(db_session, "S1", "T1", secret_key=SECRET, now=NOW)
+    second_invitation, code2 = create_guardian_invitation(
+        db_session, "S1", "T1", secret_key=SECRET, now=NOW
+    )
     redeem_guardian_invitation(
         db_session, code1, "WX-ONE", "father", "王先生", secret_key=SECRET, now=NOW
     )
@@ -167,6 +170,115 @@ def test_existing_binding_rejects_conflicting_identity(db_session):
         redeem_guardian_invitation(
             db_session, code2, "WX-ONE", "mother", "王女士", secret_key=SECRET, now=NOW
         )
+    db_session.refresh(second_invitation)
+    assert second_invitation.used_count == 0
+
+
+def test_revoked_binding_reuses_guardian_and_rejects_identity_conflict(db_session):
+    _scope(db_session)
+    guardian = Guardian(name="王先生", relationship_type="father", status="active")
+    db_session.add(guardian)
+    db_session.commit()
+    binding = GuardianChannelBinding(
+        channel="wecom_customer", external_user_id="WX-REVOKED",
+        guardian_id=guardian.guardian_id, status="revoked",
+    )
+    db_session.add(binding)
+    db_session.commit()
+    invitation, code = create_guardian_invitation(
+        db_session, "S1", "T1", secret_key=SECRET, now=NOW
+    )
+
+    redeemed = redeem_guardian_invitation(
+        db_session, code, "WX-REVOKED", "父亲", "王先生",
+        secret_key=SECRET, now=NOW,
+    )
+
+    assert redeemed.guardian_id == guardian.guardian_id
+    assert db_session.query(Guardian).count() == 1
+    assert binding.guardian_id == guardian.guardian_id
+    assert binding.status == "active"
+    assert invitation.used_count == 1
+
+    conflict_invitation, conflict_code = create_guardian_invitation(
+        db_session, "S1", "T1", secret_key=SECRET, now=NOW
+    )
+    binding.status = "revoked"
+    db_session.commit()
+    with pytest.raises(ValueError, match="身份.*冲突"):
+        redeem_guardian_invitation(
+            db_session, conflict_code, "WX-REVOKED", "mother", "王女士",
+            secret_key=SECRET, now=NOW,
+        )
+    assert binding.guardian_id == guardian.guardian_id
+    assert binding.status == "revoked"
+    assert db_session.query(Guardian).count() == 1
+    db_session.refresh(conflict_invitation)
+    assert conflict_invitation.used_count == 0
+
+
+def test_redeem_restores_revoked_student_guardian(db_session):
+    _scope(db_session)
+    guardian = Guardian(name="王先生", relationship_type="father", status="active")
+    db_session.add(guardian)
+    db_session.commit()
+    db_session.add(
+        GuardianChannelBinding(
+            channel="wecom_customer", external_user_id="WX-RESTORE",
+            guardian_id=guardian.guardian_id, status="active",
+        )
+    )
+    relation = StudentGuardian(
+        student_id="S1", guardian_id=guardian.guardian_id,
+        status="revoked", revoked_at=NOW.isoformat(),
+    )
+    db_session.add(relation)
+    db_session.commit()
+    _, code = create_guardian_invitation(
+        db_session, "S1", "T1", secret_key=SECRET, now=NOW
+    )
+
+    redeem_guardian_invitation(
+        db_session, code, "WX-RESTORE", "father", "王先生",
+        secret_key=SECRET, now=NOW,
+    )
+
+    assert relation.status == "active"
+    assert relation.revoked_at is None
+
+
+def test_failed_final_invitation_claim_rolls_back_prepared_relationships(
+    db_session, monkeypatch
+):
+    _scope(db_session)
+    _, code = create_guardian_invitation(
+        db_session, "S1", "T1", secret_key=SECRET, now=NOW
+    )
+    real_execute = db_session.execute
+    observed: dict[str, int] = {}
+
+    class LostClaim:
+        rowcount = 0
+
+    def execute_with_lost_claim(statement, *args, **kwargs):
+        if isinstance(statement, Update) and statement.table.name == "guardian_invitation":
+            observed["guardians"] = db_session.query(Guardian).count()
+            observed["bindings"] = db_session.query(GuardianChannelBinding).count()
+            observed["relations"] = db_session.query(StudentGuardian).count()
+            return LostClaim()
+        return real_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "execute", execute_with_lost_claim)
+    with pytest.raises(ValueError, match="邀请码.*使用|邀请码.*失效"):
+        redeem_guardian_invitation(
+            db_session, code, "WX-RACE", "father", "王先生",
+            secret_key=SECRET, now=NOW,
+        )
+
+    assert observed == {"guardians": 1, "bindings": 1, "relations": 1}
+    assert db_session.query(Guardian).count() == 0
+    assert db_session.query(GuardianChannelBinding).count() == 0
+    assert db_session.query(StudentGuardian).count() == 0
 
 
 def test_create_validates_inputs_status_and_teacher_scope(db_session):

@@ -157,19 +157,6 @@ def redeem_guardian_invitation(
         raise ValueError("邀请码已使用")
     _active_student(db, invitation.student_id)
 
-    claimed = db.execute(
-        update(GuardianInvitation)
-        .where(
-            GuardianInvitation.invitation_id == invitation.invitation_id,
-            GuardianInvitation.revoked_at.is_(None),
-            GuardianInvitation.used_count < GuardianInvitation.max_uses,
-        )
-        .values(used_count=GuardianInvitation.used_count + 1)
-    )
-    if claimed.rowcount != 1:
-        db.rollback()
-        raise ValueError("邀请码已使用")
-
     binding = db.scalar(
         select(GuardianChannelBinding).where(
             GuardianChannelBinding.channel == "wecom_customer",
@@ -177,12 +164,12 @@ def redeem_guardian_invitation(
         )
     )
     guardian: Guardian
-    if binding is not None and binding.status == "active":
+    if binding is not None and binding.guardian_id is not None:
         guardian = db.get(Guardian, binding.guardian_id)
         if guardian is None or guardian.status != "active":
             db.rollback()
             raise ValueError("已有监护人绑定无效")
-        if guardian.relationship_type != relation_type or guardian.name != name:
+        if guardian.relationship_type != relation_type:
             db.rollback()
             raise ValueError("已有监护人身份与本次信息冲突")
     else:
@@ -207,7 +194,6 @@ def redeem_guardian_invitation(
             db.add(binding)
         else:
             binding.guardian_id = guardian.guardian_id
-            binding.status = "active"
 
     relation = db.scalar(
         select(StudentGuardian).where(
@@ -228,9 +214,26 @@ def redeem_guardian_invitation(
         relation.revoked_at = None
         relation.bound_at = current.isoformat()
 
+    binding.status = "active"
     binding.active_student_id = invitation.student_id
     binding.pending_state_json = None
     binding.updated_at = current.isoformat()
+    db.flush()
+
+    claimed = db.execute(
+        update(GuardianInvitation)
+        .where(
+            GuardianInvitation.invitation_id == invitation.invitation_id,
+            GuardianInvitation.code_hash == code_hash,
+            GuardianInvitation.revoked_at.is_(None),
+            GuardianInvitation.expires_at > current.isoformat(),
+            GuardianInvitation.used_count < GuardianInvitation.max_uses,
+        )
+        .values(used_count=GuardianInvitation.used_count + 1)
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise ValueError("邀请码已使用或失效")
     db.commit()
     db.refresh(invitation)
     return guardian
