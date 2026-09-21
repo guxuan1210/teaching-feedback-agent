@@ -9,6 +9,22 @@ def test_disabled_customer_config_needs_no_credentials():
     )
 
 
+@pytest.mark.parametrize("value", ["1", "true", "yes", "on", "TRUE", " Yes "])
+def test_enabled_config_accepts_explicit_true_values(value):
+    with pytest.raises(ValueError, match="WECOM_CUSTOMER_CORP_ID"):
+        load_customer_config({"WECOM_CUSTOMER_ENABLED": value})
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE", " No ", "", None])
+def test_disabled_config_accepts_explicit_false_values(value):
+    assert load_customer_config({"WECOM_CUSTOMER_ENABLED": value}).enabled is False
+
+
+def test_invalid_nonempty_enabled_value_is_rejected():
+    with pytest.raises(ValueError, match="WECOM_CUSTOMER_ENABLED"):
+        load_customer_config({"WECOM_CUSTOMER_ENABLED": "sometimes"})
+
+
 def test_enabled_customer_channel_requires_all_credentials():
     with pytest.raises(ValueError, match="WECOM_CUSTOMER_CORP_ID"):
         load_customer_config({"WECOM_CUSTOMER_ENABLED": "true"})

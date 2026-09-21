@@ -24,7 +24,14 @@ _ENV_FIELDS = (
 
 
 def _enabled(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+    normalized = (value or "").strip().lower()
+    if normalized == "":
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("WECOM_CUSTOMER_ENABLED 必须是 true/false、1/0、yes/no 或 on/off")
 
 
 def load_customer_config(source: Mapping[str, str | None]) -> WecomCustomerConfig:
