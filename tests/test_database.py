@@ -21,8 +21,8 @@ def test_foreign_keys_are_enabled(db_session):
     assert enabled == 1
 
 
-def test_schema_version_is_nine():
-    assert SCHEMA_VERSION == 9
+def test_schema_version_is_ten():
+    assert SCHEMA_VERSION == 10
 
 
 def test_compose_legacy_parent_message_uses_deterministic_format():
@@ -227,7 +227,7 @@ def test_schema_sql_executes_and_exposes_family_structure(tmp_path):
     engine.dispose()
 
 
-def test_v7_database_upgrades_to_v9_with_family_tables(tmp_path):
+def test_v7_database_upgrades_to_v10_with_family_tables(tmp_path):
     path = tmp_path / "v7.db"
     schema = Path("db/schema.sql").read_text(encoding="utf-8")
     legacy_schema = schema.split("CREATE TABLE IF NOT EXISTS guardian (", 1)[0]
@@ -251,7 +251,34 @@ def test_v7_database_upgrades_to_v9_with_family_tables(tmp_path):
         "family_message",
     }
     with engine.connect() as upgraded:
-        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 9
+        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 10
+    engine.dispose()
+
+
+def test_v9_database_adds_quarantine_path_without_losing_images(tmp_path):
+    path = tmp_path / "v9-media.db"
+    schema = Path("db/schema.sql").read_text(encoding="utf-8")
+    legacy_schema = schema.replace("    quarantine_path TEXT,\n", "").replace(
+        " AND quarantine_path IS NULL", ""
+    ).replace(" AND quarantine_path IS NOT NULL", "")
+    connection = sqlite3.connect(path)
+    connection.executescript(legacy_schema)
+    connection.execute("INSERT INTO teacher (teacher_id,name,role,status) VALUES ('T-MIG','迁移教师','管理员','active')")
+    connection.execute("INSERT INTO student (student_id,name,status) VALUES ('S-MIG','迁移学生','active')")
+    connection.execute(
+        "INSERT INTO student_image (image_id,student_id,uploaded_by_teacher_id,source_message_id,source_position,mime_type,extension,byte_size,sha256,storage_path,status) "
+        "VALUES ('IMG-MIG','S-MIG','T-MIG','MSG-MIG',0,'image/png','png',12,?, 'S-MIG/x.png','active')",
+        ("a" * 64,),
+    )
+    connection.execute("PRAGMA user_version = 9")
+    connection.commit(); connection.close()
+    engine = build_engine(f"sqlite+pysqlite:///{path.as_posix()}")
+    initialize_database(engine)
+    columns = {item["name"] for item in inspect(engine).get_columns("student_image")}
+    assert "quarantine_path" in columns
+    with engine.connect() as migrated:
+        assert migrated.exec_driver_sql("PRAGMA user_version").scalar_one() == 10
+        assert migrated.exec_driver_sql("SELECT image_id,quarantine_path FROM student_image").one() == ("IMG-MIG", None)
     engine.dispose()
 
 
@@ -324,7 +351,7 @@ def test_v8_family_database_migrates_assignments_without_data_loss(tmp_path):
     assert "origin = 'manual'" in assignment_checks
     assert "origin = 'class_sync'" in assignment_checks
     with engine.begin() as upgraded:
-        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 9
+        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 10
         rows = upgraded.exec_driver_sql(
             "SELECT assignment_id,start_date,end_date,status,origin,source_enrollment_id "
             "FROM student_teacher_assignment ORDER BY assignment_id"

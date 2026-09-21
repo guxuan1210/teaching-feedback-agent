@@ -443,10 +443,11 @@ CREATE TABLE IF NOT EXISTS student_image (
     uploaded_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     deleted_at             TEXT,
     deleted_by_teacher_id  TEXT REFERENCES teacher(teacher_id),
+    quarantine_path TEXT,
     UNIQUE (source_message_id, source_position),
     CHECK (status IN ('active', 'deleted')),
-    CHECK ((status = 'active' AND deleted_at IS NULL AND deleted_by_teacher_id IS NULL)
-        OR (status = 'deleted' AND deleted_at IS NOT NULL AND deleted_by_teacher_id IS NOT NULL))
+    CHECK ((status = 'active' AND deleted_at IS NULL AND deleted_by_teacher_id IS NULL AND quarantine_path IS NULL)
+        OR (status = 'deleted' AND deleted_at IS NOT NULL AND deleted_by_teacher_id IS NOT NULL AND quarantine_path IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS ix_student_image_student_status_uploaded
     ON student_image(student_id, status, uploaded_at);

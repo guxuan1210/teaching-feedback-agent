@@ -12,7 +12,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class Base(DeclarativeBase):
@@ -105,6 +105,9 @@ def _add_missing_columns(engine: Engine) -> None:
             conn.exec_driver_sql(
                 "ALTER TABLE chat_message ADD COLUMN channel VARCHAR"
             )
+        image_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(student_image)")}
+        if image_cols and "quarantine_path" not in image_cols:
+            conn.exec_driver_sql("ALTER TABLE student_image ADD COLUMN quarantine_path VARCHAR")
 
 
 def _migrate_student_teacher_assignments(engine: Engine) -> None:

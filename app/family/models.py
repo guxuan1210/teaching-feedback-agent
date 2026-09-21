@@ -218,6 +218,7 @@ class StudentImage(Base):
     deleted_by_teacher_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("teacher.teacher_id")
     )
+    quarantine_path: Mapped[str | None] = mapped_column(String)
 
     __table_args__ = (
         UniqueConstraint(
@@ -228,9 +229,9 @@ class StudentImage(Base):
         ),
         CheckConstraint(
             "(status = 'active' AND deleted_at IS NULL "
-            "AND deleted_by_teacher_id IS NULL) OR "
+            "AND deleted_by_teacher_id IS NULL AND quarantine_path IS NULL) OR "
             "(status = 'deleted' AND deleted_at IS NOT NULL "
-            "AND deleted_by_teacher_id IS NOT NULL)",
+            "AND deleted_by_teacher_id IS NOT NULL AND quarantine_path IS NOT NULL)",
             name="ck_student_image_deletion_metadata",
         ),
         Index(
