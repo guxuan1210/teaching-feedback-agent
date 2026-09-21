@@ -6,13 +6,22 @@ import logging
 import re
 import secrets
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Callable
+
+from sqlalchemy import or_, select
 
 from app.chat.generation import GenerationCoordinator
 from app.family.storage import LocalImageStore
+from app.catalog.models import Student, Teacher
+from app.family.models import (
+    FamilyConversation, FamilyMessage, Guardian, GuardianChannelBinding,
+    StudentGuardian,
+    StudentTeacherAssignment,
+)
 from app.wecom.config import WecomConfig
 from app.wecom.handler import BotEvent, process_scope_choice, process_text
+from app.wecom.models import TeacherWecomBinding
 from app.wecom.media_handler import (
     download_and_decrypt_images,
     is_bound_teacher,
@@ -64,6 +73,7 @@ class WecomGateway:
         client_factory: Callable[[WecomConfig], object] | None = None,
         generation_coordinator: GenerationCoordinator | None = None,
         image_store: LocalImageStore | None = None,
+        customer_client=None,
     ) -> None:
         self.config = config
         self.session_factory = session_factory
@@ -74,6 +84,7 @@ class WecomGateway:
         self.image_store = image_store or LocalImageStore(
             config.media_root, max_bytes=config.media_max_bytes
         )
+        self.customer_client = customer_client
         self.client = None
         self.connected = False
         self.authenticated = False
@@ -157,6 +168,85 @@ class WecomGateway:
         self.authenticated = False
         self.client = None
 
+    async def notify_teacher(self, conversation_id: str) -> bool:
+        """Notify only the current primary teacher of a waiting family conversation."""
+        effective = date.today().isoformat()
+        with self.session_factory() as db:
+            conversation = db.get(FamilyConversation, conversation_id)
+            if (
+                conversation is None
+                or conversation.channel != "wecom_customer"
+                or conversation.status != "waiting_teacher"
+            ):
+                return False
+            teacher_id = db.scalar(select(StudentTeacherAssignment.teacher_id).join(
+                Teacher, Teacher.teacher_id == StudentTeacherAssignment.teacher_id
+            ).where(
+                StudentTeacherAssignment.student_id == conversation.student_id,
+                StudentTeacherAssignment.role == "primary",
+                StudentTeacherAssignment.status == "active",
+                StudentTeacherAssignment.start_date <= effective,
+                or_(StudentTeacherAssignment.end_date.is_(None), StudentTeacherAssignment.end_date >= effective),
+                Teacher.status == "active",
+            ).order_by(StudentTeacherAssignment.start_date.desc()).limit(1))
+            if teacher_id is None:
+                return False
+            teacher_binding = db.scalar(select(TeacherWecomBinding.wecom_user_id).where(
+                TeacherWecomBinding.teacher_id == teacher_id
+            ))
+            guardian = db.get(Guardian, conversation.guardian_id)
+            student = db.get(Student, conversation.student_id)
+            relation = db.scalar(select(StudentGuardian.relation_id).where(
+                StudentGuardian.student_id == conversation.student_id,
+                StudentGuardian.guardian_id == conversation.guardian_id,
+                StudentGuardian.status == "active",
+            ))
+            parent_binding = db.scalar(select(GuardianChannelBinding.binding_id).where(
+                GuardianChannelBinding.channel == "wecom_customer",
+                GuardianChannelBinding.external_user_id == conversation.channel_conversation_id,
+                GuardianChannelBinding.guardian_id == conversation.guardian_id,
+                GuardianChannelBinding.status == "active",
+            ))
+            message = db.scalar(select(FamilyMessage).where(
+                FamilyMessage.conversation_id == conversation_id,
+                FamilyMessage.direction == "inbound",
+                FamilyMessage.sender_type == "guardian",
+            ).order_by(FamilyMessage.created_at.desc(), FamilyMessage.message_id.desc()).limit(1))
+            if (
+                not teacher_binding or guardian is None or guardian.status != "active"
+                or student is None or student.status != "active" or relation is None
+                or parent_binding is None or message is None
+            ):
+                return False
+            relationship = {"father": "父亲", "mother": "母亲", "other": "监护人"}.get(
+                guardian.relationship_type, "监护人"
+            )
+            # Render untrusted names and parent text as plain markdown text.
+            def safe(value: str) -> str:
+                return (value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            content = (
+                f"**家长请求老师回复**\n\n"
+                f"学生：{safe(student.name)}（{safe(student.student_id)}）\n"
+                f"家长：{safe(relationship)} {safe(guardian.name)}\n"
+                f"问题：{safe(message.content)}\n\n"
+                f"会话编号：{safe(conversation.conversation_id)}\n"
+                f"请回复：`回复 {safe(conversation.conversation_id)} 回复内容`"
+            )
+        if self.client is None:
+            return False
+        try:
+            result = self.client.send_message(
+                teacher_binding,
+                {"msgtype": "markdown", "markdown": {"content": content}},
+            )
+            if inspect.isawaitable(result):
+                await result
+            return True
+        except Exception as exc:  # noqa: BLE001 - do not log parent content
+            logger.warning("WeCom family teacher notification failed type=%s", type(exc).__name__)
+            self.last_error_at = datetime.now(timezone.utc).isoformat()
+            return False
+
     async def _produce_events(self, body: dict, queue: asyncio.Queue) -> None:
         loop = asyncio.get_running_loop()
 
@@ -173,6 +263,7 @@ class WecomGateway:
                         chattype=body.get("chattype", "single"),
                         public_base_url=self.config.public_base_url,
                         coordinator=self.generation_coordinator,
+                        customer_client=self.customer_client,
                     )
                     for event in events:
                         asyncio.run_coroutine_threadsafe(queue.put(event), loop).result()

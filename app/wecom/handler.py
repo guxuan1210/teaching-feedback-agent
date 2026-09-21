@@ -240,6 +240,7 @@ def process_text(
     public_base_url: str | None = None,
     forced_scope: ScopeChoice | None = None,
     coordinator: GenerationCoordinator | None = None,
+    customer_client=None,
 ) -> Iterator[BotEvent]:
     coordinator = coordinator or GenerationCoordinator()
     if db.get(WecomInboundMessage, message_id) is not None:
@@ -285,6 +286,17 @@ def process_text(
     if teacher is None or teacher.status != "active":
         _finish(db, inbound, "failed")
         yield BotEvent("failed", "教师账号已停用，请联系管理员。")
+        return
+    from app.wecom.family_handler import (
+        is_family_reply_command,
+        process_family_reply_command,
+    )
+    if is_family_reply_command(content):
+        event = process_family_reply_command(
+            db, wecom_user_id, content, customer_client
+        )
+        _finish(db, inbound, "completed" if event.status == "completed" else "failed")
+        yield event
         return
     if content == "解除绑定":
         unbind_teacher(db, teacher.teacher_id)
