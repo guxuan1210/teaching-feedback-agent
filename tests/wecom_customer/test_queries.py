@@ -148,6 +148,24 @@ def test_recent_feedback_uses_profile_summary(db_session, profile_feedback):
     assert "已作废备注" not in replies[-1].content
 
 
+def test_recent_feedback_excludes_an_ended_enrollment(db_session, profile_feedback):
+    from datetime import date, timedelta
+    from app.catalog.models import Enrollment, Student, Teacher
+    enrollment = db_session.query(Enrollment).filter_by(student_id="S1").one()
+    enrollment.end_date = (date.today() - timedelta(days=1)).isoformat()
+    student = db_session.get(Student, "S1")
+    teacher = db_session.get(Teacher, "T1")
+    _admin(db_session, teacher)
+    db_session.commit()
+    _, code = create_guardian_invitation(db_session, student.student_id, teacher.teacher_id, secret_key=SECRET)
+    _bind(db_session, student, teacher, code)
+    replies = process_parent_text(
+        db_session, object(), secret_key=SECRET, external_user_id="EXT1",
+        message_id="M3", text="看最近反馈",
+    )
+    assert replies[-1].content == "【机器人回复】最近暂无有效反馈记录。"
+
+
 def test_conversation_assignment_uses_only_effective_active_primary_teacher(
     db_session, student, teacher
 ):

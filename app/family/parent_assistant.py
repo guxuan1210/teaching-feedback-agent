@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 import re
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.catalog.models import Enrollment, Student
@@ -73,6 +73,10 @@ def answer_parent_query(
                 Enrollment.student_id == requested_id,
                 Enrollment.status == "active",
                 Enrollment.start_date <= date.today().isoformat(),
+                or_(
+                    Enrollment.end_date.is_(None),
+                    Enrollment.end_date >= date.today().isoformat(),
+                ),
             ).order_by(Enrollment.start_date.desc(), Enrollment.enrollment_id.desc())
         ))
         notes: list[str] = []

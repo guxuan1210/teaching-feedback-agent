@@ -9,7 +9,7 @@ import json
 import re
 
 from sqlalchemy import or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.family import invitations
@@ -52,12 +52,25 @@ def _binding(db: Session, external_user_id: str) -> GuardianChannelBinding:
         GuardianChannelBinding.external_user_id == external_user_id,
     ))
     if row is None:
-        row = GuardianChannelBinding(
-            channel="wecom_customer", external_user_id=external_user_id,
-            status="pending", pending_state_json=None,
-        )
-        db.add(row)
-        db.commit()
+        for attempt in range(2):
+            row = GuardianChannelBinding(
+                channel="wecom_customer", external_user_id=external_user_id,
+                status="pending", pending_state_json=None,
+            )
+            db.add(row)
+            try:
+                db.commit()
+                break
+            except (IntegrityError, OperationalError):
+                db.rollback()
+                row = db.scalar(select(GuardianChannelBinding).where(
+                    GuardianChannelBinding.channel == "wecom_customer",
+                    GuardianChannelBinding.external_user_id == external_user_id,
+                ))
+                if row is not None:
+                    break
+                if attempt == 1:
+                    raise
     return row
 
 
@@ -158,9 +171,17 @@ def process_parent_text(
     # inbound transcript is recorded.
     invitation = _invite_by_code(db, body, secret_key)
     if invitation is not None:
+        pending = _load(binding.pending_state_json)
+        if (
+            pending.get("step") == "awaiting_relationship"
+            and pending.get("invitation_id") == invitation.invitation_id
+            and pending.get("invitation_message_id") == msg_id
+        ):
+            return _reply("请选择身份：父亲、母亲或其他监护人。")
         binding.pending_state_json = _dump({
             "step": "awaiting_relationship",
             "invitation_id": invitation.invitation_id,
+            "invitation_message_id": msg_id,
         })
         db.commit()
         return _reply("请选择身份：父亲、母亲或其他监护人。")
@@ -207,6 +228,14 @@ def process_parent_text(
                     db, guardian.guardian_id, binding.active_student_id, external
                 )
                 _record_inbound(db, conversation, msg_id, body)
+                invitation_message_id = pending.get("invitation_message_id")
+                if (
+                    isinstance(invitation_message_id, str)
+                    and invitation_message_id != msg_id
+                ):
+                    _record_inbound(
+                        db, conversation, invitation_message_id, "[邀请码已核销]"
+                    )
         return _reply("【机器人回复】绑定成功。你可以查看最近图片、最近反馈或已定稿周报。")
 
     if binding.status != "active" or guardian is None or guardian.status != "active":
