@@ -77,7 +77,7 @@ def _parent_context(db: Session, student_id: str) -> list[dict[str, str]]:
 
 def answer_parent_question(
     db: Session, provider, *, guardian_id: str, student_id: str, text: str,
-    inbound_message: FamilyMessage | None = None,
+    inbound_message: FamilyMessage | None = None, conversation_id: str | None = None,
 ) -> ParentAnswerResult:
     """Persist an inbound question and labelled bot response, or queue a teacher handoff."""
     from app.core.ids import new_id
@@ -85,12 +85,18 @@ def answer_parent_question(
 
     if not guardian_can_access_student(db, guardian_id, student_id):
         raise PermissionError("你没有查看该学生的权限")
-    conversation = db.scalar(select(FamilyConversation).where(
-        FamilyConversation.guardian_id == guardian_id,
-        FamilyConversation.student_id == student_id,
-    ).order_by(FamilyConversation.updated_at.desc()).limit(1))
+    conversation = db.get(FamilyConversation, conversation_id) if conversation_id else db.scalar(
+        select(FamilyConversation).where(
+            FamilyConversation.guardian_id == guardian_id,
+            FamilyConversation.student_id == student_id,
+        ).order_by(FamilyConversation.updated_at.desc()).limit(1)
+    )
     if conversation is None:
         raise ValueError("家庭会话不存在")
+    if conversation.guardian_id != guardian_id or conversation.student_id != student_id:
+        raise PermissionError("家庭会话与当前学生不匹配")
+    if inbound_message is not None and inbound_message.conversation_id != conversation.conversation_id:
+        raise PermissionError("入站消息与当前会话不匹配")
     inbound = inbound_message or conversations.record_inbound_parent_message(
         db, conversation.conversation_id, new_id("IN"), (text or "")[:4000]
     )

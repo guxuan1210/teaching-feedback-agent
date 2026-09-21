@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.family.models import FamilyConversation, FamilyMessage, Guardian, StudentGuardian
 from app.family.conversations import record_inbound_parent_message
 from app.family.parent_assistant import answer_parent_question
+from app.wecom_customer.handler import process_parent_text
 
 
 class Provider:
@@ -270,3 +271,134 @@ def test_replayed_manual_handoff_creates_durable_fallback(db_session, student, t
     assert outbound.status == "completed"
     assert conversation.status == "waiting_teacher"
     assert replies[0].content == outbound.content
+
+
+def _bind_external_parent(db_session, student, teacher, external_user_id="EXT1"):
+    from app.family.invitations import create_guardian_invitation
+    from app.wecom_customer.handler import process_parent_text
+
+    teacher.role = "管理员"
+    db_session.commit()
+    _invitation, code = create_guardian_invitation(
+        db_session, student.student_id, teacher.teacher_id, secret_key="test-invitation-secret"
+    )
+    process_parent_text(
+        db_session, object(), secret_key="test-invitation-secret",
+        external_user_id=external_user_id, message_id=f"{external_user_id}-BIND1", text=code,
+    )
+    process_parent_text(
+        db_session, object(), secret_key="test-invitation-secret",
+        external_user_id=external_user_id, message_id=f"{external_user_id}-BIND2", text="母亲",
+    )
+    from app.family.models import GuardianChannelBinding
+    return db_session.query(GuardianChannelBinding).filter_by(
+        external_user_id=external_user_id
+    ).one()
+
+
+def _add_second_child(db_session, binding):
+    from app.catalog.models import Student
+    child = Student(
+        student_id="S2", name="另一个孩子", grade="三年级",
+        current_stage="三阶", status="active",
+    )
+    db_session.add(child)
+    db_session.flush()
+    db_session.add(StudentGuardian(student_id=child.student_id, guardian_id=binding.guardian_id))
+    binding.active_student_id = child.student_id
+    db_session.commit()
+    return child
+
+
+def test_replay_after_child_switch_uses_original_inbound_student(db_session, student, teacher):
+    from app.family.conversations import record_inbound_parent_message
+    binding = _bind_external_parent(db_session, student, teacher)
+    _add_second_child(db_session, binding)
+    conversation = db_session.query(FamilyConversation).filter_by(
+        guardian_id=binding.guardian_id, student_id=student.student_id
+    ).one()
+    record_inbound_parent_message(
+        db_session, conversation.conversation_id, "Q-OLD-CHILD", "这条旧消息属于原孩子"
+    )
+
+    class Provider:
+        def __init__(self): self.context = None
+        def answer(self, prompt, context): self.context = context; return "原孩子的回复"
+    class Customer:
+        def __init__(self): self.sent = []
+        def send_text(self, external_user_id, content): self.sent.append((external_user_id, content)); return "OUT-OLD"
+
+    provider, customer = Provider(), Customer()
+    replies = process_parent_text(
+        db_session, customer, secret_key="test-invitation-secret", external_user_id="EXT1",
+        message_id="Q-OLD-CHILD", text="这条旧消息属于原孩子", assistant_provider=provider,
+    )
+    assert provider.context[0]["student_id"] == student.student_id
+    assert replies[0].content == "【机器人回复】原孩子的回复"
+    assert customer.sent == [("EXT1", replies[0].content)]
+
+
+def test_duplicate_from_different_external_user_is_never_delivered(db_session, student, teacher):
+    from app.family.conversations import record_bot_reply, record_inbound_parent_message
+    binding = _bind_external_parent(db_session, student, teacher, "EXT1")
+    conversation = db_session.query(FamilyConversation).filter_by(
+        guardian_id=binding.guardian_id, student_id=student.student_id
+    ).one()
+    inbound = record_inbound_parent_message(
+        db_session, conversation.conversation_id, "Q-FOREIGN-REPLAY", "private question"
+    )
+    record_bot_reply(
+        db_session, conversation.conversation_id, "private answer",
+        reply_to_message_id=inbound.message_id,
+    )
+
+    class Customer:
+        def __init__(self): self.sent = []
+        def send_text(self, external_user_id, content): self.sent.append((external_user_id, content)); return "OUT-X"
+
+    customer = Customer()
+    result = process_parent_text(
+        db_session, customer, secret_key="test-invitation-secret", external_user_id="EXT2",
+        message_id="Q-FOREIGN-REPLAY", text="forged replay",
+        assistant_provider=Provider("should not run"),
+    )
+    assert result == []
+    assert customer.sent == []
+
+
+def test_replay_refuses_original_student_after_relationship_revocation(db_session, student, teacher):
+    from app.family.conversations import record_inbound_parent_message
+    binding = _bind_external_parent(db_session, student, teacher)
+    _add_second_child(db_session, binding)
+    relation = db_session.query(StudentGuardian).filter_by(
+        student_id=student.student_id, guardian_id=binding.guardian_id
+    ).one()
+    relation.status = "revoked"
+    db_session.commit()
+    conversation = db_session.query(FamilyConversation).filter_by(
+        guardian_id=binding.guardian_id, student_id=student.student_id
+    ).one()
+    record_inbound_parent_message(
+        db_session, conversation.conversation_id, "Q-REVOKED-REPLAY", "private old question"
+    )
+
+    class Provider:
+        def __init__(self): self.calls = 0
+        def answer(self, prompt, context): self.calls += 1; return "must not be sent"
+    class Customer:
+        def __init__(self): self.sent = []
+        def send_text(self, external_user_id, content): self.sent.append(content); return "OUT-R"
+
+    provider, customer = Provider(), Customer()
+    process_parent_text(
+        db_session, customer, secret_key="test-invitation-secret", external_user_id="EXT1",
+        message_id="Q-REVOKED-REPLAY", text="private old question",
+        assistant_provider=provider,
+    )
+    assert provider.calls == 0
+    assert customer.sent == []
+    assert db_session.query(FamilyMessage).filter_by(
+        reply_to_message_id=db_session.query(FamilyMessage.message_id)
+        .filter_by(channel_message_id="Q-REVOKED-REPLAY").scalar(),
+        direction="outbound",
+    ).count() == 0

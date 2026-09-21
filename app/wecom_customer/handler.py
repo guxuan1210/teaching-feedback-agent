@@ -255,7 +255,31 @@ def process_parent_text(
         FamilyMessage.direction == "inbound",
     ))
     if duplicate is not None:
+        original_conversation = db.get(FamilyConversation, duplicate.conversation_id)
+        binding = db.scalar(select(GuardianChannelBinding).where(
+            GuardianChannelBinding.channel == "wecom_customer",
+            GuardianChannelBinding.external_user_id == external,
+            GuardianChannelBinding.status == "active",
+        ))
+        if (
+            duplicate.sender_type != "guardian"
+            or original_conversation is None
+            or original_conversation.channel != "wecom_customer"
+            or original_conversation.channel_conversation_id != external
+            or binding is None
+            or binding.guardian_id != original_conversation.guardian_id
+        ):
+            return []
+        guardian = db.get(Guardian, original_conversation.guardian_id)
+        original_student_id = original_conversation.student_id
+        if (
+            guardian is None or guardian.status != "active"
+            or not guardian_can_access_student(db, guardian.guardian_id, original_student_id)
+        ):
+            return []
         saved = conversations.outbound_for_inbound(db, duplicate.message_id)
+        if any(row.conversation_id != original_conversation.conversation_id for row in saved):
+            return []
         replayable_text = duplicate.content not in (
             "[邀请码已核销]", *_RELATIONSHIPS.keys()
         )
@@ -263,31 +287,24 @@ def process_parent_text(
             token in duplicate.content
             for token in ("图片", "反馈", "周报", "请老师回复", "转老师")
         )
-        if replayable_text and (not saved or deterministic_query):
-            binding = db.scalar(select(GuardianChannelBinding).where(
-                GuardianChannelBinding.channel == "wecom_customer",
-                GuardianChannelBinding.external_user_id == external,
-            ))
-            guardian = db.get(Guardian, binding.guardian_id) if binding and binding.guardian_id else None
-            student_id = binding.active_student_id if binding else None
-            if (
-                guardian is not None and guardian.status == "active" and student_id
-                and binding.status == "active"
-                and guardian_can_access_student(db, guardian.guardian_id, student_id)
-            ):
-                conversation = _conversation(db, guardian.guardian_id, student_id, external)
-                if not saved and assistant_provider is not None and not deterministic_query:
-                    answer_parent_question(
-                        db, assistant_provider, guardian_id=guardian.guardian_id,
-                        student_id=student_id, text=duplicate.content,
-                        inbound_message=duplicate,
-                    )
-                else:
-                    _queue_query_replies(
-                        db, conversation, duplicate, guardian.guardian_id,
-                        student_id, duplicate.content,
-                    )
-                saved = conversations.outbound_for_inbound(db, duplicate.message_id)
+        rebuild_deterministic = bool(
+            saved and deterministic_query
+            and any(row.status != "completed" for row in saved)
+        )
+        if replayable_text and (not saved or rebuild_deterministic):
+            if not saved and assistant_provider is not None and not deterministic_query:
+                answer_parent_question(
+                    db, assistant_provider, guardian_id=guardian.guardian_id,
+                    student_id=original_student_id, text=duplicate.content,
+                    inbound_message=duplicate,
+                    conversation_id=original_conversation.conversation_id,
+                )
+            elif not saved or rebuild_deterministic:
+                _queue_query_replies(
+                    db, original_conversation, duplicate, guardian.guardian_id,
+                    original_student_id, duplicate.content,
+                )
+            saved = conversations.outbound_for_inbound(db, duplicate.message_id)
         if saved and all(row.status == "completed" for row in saved):
             return _reply("【机器人回复】这条消息已处理。")
         _deliver_outbox(db, customer, external, image_store, msg_id)
