@@ -276,10 +276,17 @@ def process_parent_text(
                 and guardian_can_access_student(db, guardian.guardian_id, student_id)
             ):
                 conversation = _conversation(db, guardian.guardian_id, student_id, external)
-                _queue_query_replies(
-                    db, conversation, duplicate, guardian.guardian_id,
-                    student_id, duplicate.content,
-                )
+                if not saved and assistant_provider is not None and not deterministic_query:
+                    answer_parent_question(
+                        db, assistant_provider, guardian_id=guardian.guardian_id,
+                        student_id=student_id, text=duplicate.content,
+                        inbound_message=duplicate,
+                    )
+                else:
+                    _queue_query_replies(
+                        db, conversation, duplicate, guardian.guardian_id,
+                        student_id, duplicate.content,
+                    )
                 saved = conversations.outbound_for_inbound(db, duplicate.message_id)
         if saved and all(row.status == "completed" for row in saved):
             return _reply("【机器人回复】这条消息已处理。")

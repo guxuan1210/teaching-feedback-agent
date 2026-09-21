@@ -171,3 +171,102 @@ def test_bound_handler_persists_provider_answer_under_channel_message_id(db_sess
     assert inbound.status == "completed"
     assert outbound.content.startswith("【机器人回复】孩子最近按时完成练习")
     assert result[0].content == outbound.content
+
+
+def test_replay_recovers_free_form_answer_after_inbound_commit(db_session, student, teacher):
+    from app.family.conversations import record_inbound_parent_message
+    from app.family.invitations import create_guardian_invitation
+    from app.family.models import GuardianChannelBinding
+    from app.wecom_customer.handler import process_parent_text
+
+    teacher.role = "管理员"
+    db_session.commit()
+    _invitation, code = create_guardian_invitation(
+        db_session, student.student_id, teacher.teacher_id, secret_key="test-invitation-secret"
+    )
+    process_parent_text(db_session, object(), secret_key="test-invitation-secret",
+                        external_user_id="EXT1", message_id="BIND1", text=code)
+    process_parent_text(db_session, object(), secret_key="test-invitation-secret",
+                        external_user_id="EXT1", message_id="BIND2", text="母亲")
+    binding = db_session.query(GuardianChannelBinding).one()
+    conversation = db_session.query(FamilyConversation).filter_by(
+        guardian_id=binding.guardian_id, student_id=student.student_id
+    ).one()
+    record_inbound_parent_message(
+        db_session, conversation.conversation_id, "Q-LLM-CRASH", "能聊聊最近的学习吗？"
+    )
+
+    class CountingProvider:
+        def __init__(self): self.calls = 0
+        def answer(self, prompt, context):
+            self.calls += 1
+            return "孩子最近稳步进步。"
+
+    class Customer:
+        def __init__(self): self.sent = []
+        def send_text(self, external_user_id, content):
+            self.sent.append(content)
+            return f"OUT-{len(self.sent)}"
+
+    provider, customer = CountingProvider(), Customer()
+    args = dict(
+        secret_key="test-invitation-secret", external_user_id="EXT1",
+        message_id="Q-LLM-CRASH", text="能聊聊最近的学习吗？",
+        assistant_provider=provider,
+    )
+    first = process_parent_text(db_session, customer, **args)
+    second = process_parent_text(db_session, customer, **args)
+
+    inbound = db_session.query(FamilyMessage).filter_by(channel_message_id="Q-LLM-CRASH").one()
+    outbound = db_session.query(FamilyMessage).filter_by(
+        reply_to_message_id=inbound.message_id, direction="outbound"
+    ).all()
+    assert provider.calls == 1
+    assert len(outbound) == 1
+    assert outbound[0].content == "【机器人回复】孩子最近稳步进步。"
+    assert outbound[0].status == "completed"
+    assert customer.sent == [outbound[0].content]
+    assert first[0].content == outbound[0].content
+    assert second[-1].content == "【机器人回复】这条消息已处理。"
+
+
+def test_replayed_manual_handoff_creates_durable_fallback(db_session, student, teacher):
+    from app.family.conversations import record_inbound_parent_message
+    from app.family.invitations import create_guardian_invitation
+    from app.family.models import GuardianChannelBinding
+    from app.wecom_customer.handler import process_parent_text
+
+    teacher.role = "管理员"
+    db_session.commit()
+    _invitation, code = create_guardian_invitation(
+        db_session, student.student_id, teacher.teacher_id, secret_key="test-invitation-secret"
+    )
+    process_parent_text(db_session, object(), secret_key="test-invitation-secret",
+                        external_user_id="EXT1", message_id="BIND1", text=code)
+    process_parent_text(db_session, object(), secret_key="test-invitation-secret",
+                        external_user_id="EXT1", message_id="BIND2", text="母亲")
+    binding = db_session.query(GuardianChannelBinding).one()
+    conversation = db_session.query(FamilyConversation).filter_by(
+        guardian_id=binding.guardian_id, student_id=student.student_id
+    ).one()
+    record_inbound_parent_message(
+        db_session, conversation.conversation_id, "Q-HANDOFF-CRASH", "我想投诉这次服务"
+    )
+
+    class Provider:
+        def answer(self, prompt, context): raise AssertionError("manual handoff skips the model")
+    class Customer:
+        def send_text(self, external_user_id, content): return "OUT-HANDOFF"
+
+    replies = process_parent_text(
+        db_session, Customer(), secret_key="test-invitation-secret", external_user_id="EXT1",
+        message_id="Q-HANDOFF-CRASH", text="我想投诉这次服务", assistant_provider=Provider(),
+    )
+    inbound = db_session.query(FamilyMessage).filter_by(channel_message_id="Q-HANDOFF-CRASH").one()
+    outbound = db_session.query(FamilyMessage).filter_by(
+        reply_to_message_id=inbound.message_id, direction="outbound"
+    ).one()
+    assert outbound.content == "【机器人回复】我已记录问题并转交负责老师。"
+    assert outbound.status == "completed"
+    assert conversation.status == "waiting_teacher"
+    assert replies[0].content == outbound.content
