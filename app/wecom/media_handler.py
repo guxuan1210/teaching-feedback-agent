@@ -5,8 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import re
+import ssl
 
 import aiohttp
+
+try:
+    import certifi
+
+    _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    # Match the SDK: use certifi roots when available, otherwise system roots.
+    _SSL_CONTEXT = ssl.create_default_context()
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -103,7 +112,8 @@ async def _download_limited(client, url: str, aes_key: str | None, max_bytes: in
     wire_limit = max_bytes if not aes_key else max_bytes + 47
     chunks: list[bytes] = []
     size = 0
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    connector = aiohttp.TCPConnector(ssl=_SSL_CONTEXT)
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
         async with session.get(url) as response:
             response.raise_for_status()
             content_length = response.headers.get("Content-Length")

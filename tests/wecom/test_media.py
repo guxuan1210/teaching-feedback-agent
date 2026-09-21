@@ -279,3 +279,43 @@ def test_streaming_download_stops_on_ciphertext_cap(monkeypatch):
             await media_handler._download_limited(object(), "https://media", None, 5)
     asyncio.run(scenario())
     assert content.yielded == 8  # Does not read the remaining response after crossing the cap.
+
+
+def test_streaming_download_uses_verified_sdk_compatible_tls(monkeypatch):
+    import ssl
+    import app.wecom.media_handler as media_handler
+
+    captured = {}
+
+    class Content:
+        async def iter_chunked(self, _size):
+            if False:
+                yield b""
+
+    class Response:
+        headers = {}
+        content = Content()
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): pass
+        def raise_for_status(self): pass
+
+    class Connector:
+        def __init__(self, *, ssl): captured["ssl"] = ssl
+
+    class Session:
+        def __init__(self, **kwargs): captured["connector"] = kwargs["connector"]
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): pass
+        def get(self, _url): return Response()
+
+    monkeypatch.setattr(media_handler.aiohttp, "TCPConnector", Connector)
+    monkeypatch.setattr(media_handler.aiohttp, "ClientSession", Session)
+
+    async def scenario():
+        assert await media_handler._download_limited(object(), "https://media", None, 5) == b""
+
+    asyncio.run(scenario())
+    assert captured["connector"].__class__ is Connector
+    assert isinstance(captured["ssl"], ssl.SSLContext)
+    assert captured["ssl"].verify_mode == ssl.CERT_REQUIRED
+    assert captured["ssl"].check_hostname is True
