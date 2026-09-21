@@ -1,4 +1,5 @@
 import asyncio
+import threading
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -157,3 +158,64 @@ def test_handoff_callback_notifies_teacher_once_and_persists_sent_state(database
     }]
     asyncio.run(restarted.state.process_wecom_customer_token("sync-new-handoff"))
     assert len(calls) == 3
+
+
+def test_customer_sync_and_parent_processing_run_off_event_loop(database_url, monkeypatch):
+    import app.main as main_module
+
+    customer = FakeCustomer()
+    app = create_app(
+        database_url=database_url, wecom_customer_config=ENABLED,
+        wecom_customer_client=customer, callback_crypto=FakeCrypto(),
+    )
+    callback_thread = threading.get_ident()
+    observed = {}
+    original_sync = customer.sync_messages
+
+    def blocking_sync(cursor, token):
+        observed["sync_thread"] = threading.get_ident()
+        return original_sync(cursor, token)
+
+    customer.messages = [{
+        "msgtype": "text", "external_userid": "EXT-UNBOUND", "msgid": "M-THREAD",
+        "text": {"content": "hello"},
+    }]
+    customer.sync_messages = blocking_sync
+    original_handler = main_module.process_parent_text
+
+    def blocking_handler(*args, **kwargs):
+        observed["handler_thread"] = threading.get_ident()
+        return original_handler(*args, **kwargs)
+
+    monkeypatch.setattr(main_module, "process_parent_text", blocking_handler)
+    asyncio.run(app.state.process_wecom_customer_token("sync-thread"))
+    assert observed["sync_thread"] != callback_thread
+    assert observed["handler_thread"] != callback_thread
+
+
+def test_customer_sync_supports_async_client_methods(database_url):
+    class AsyncCustomer(FakeCustomer):
+        async def sync_messages(self, cursor, token):
+            return SyncResult(None, [])
+
+    app = create_app(
+        database_url=database_url, wecom_customer_config=ENABLED,
+        wecom_customer_client=AsyncCustomer(), callback_crypto=FakeCrypto(),
+    )
+    asyncio.run(app.state.process_wecom_customer_token("sync-async"))
+
+
+def test_customer_sync_awaits_awaitable_returned_by_sync_method(database_url):
+    customer = FakeCustomer()
+
+    def sync_messages(cursor, token):
+        async def result():
+            return SyncResult(None, [])
+        return result()
+
+    customer.sync_messages = sync_messages
+    app = create_app(
+        database_url=database_url, wecom_customer_config=ENABLED,
+        wecom_customer_client=customer, callback_crypto=FakeCrypto(),
+    )
+    asyncio.run(app.state.process_wecom_customer_token("sync-hybrid"))

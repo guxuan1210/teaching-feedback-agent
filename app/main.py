@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import asyncio
+import inspect
 import logging
 import os
 from pathlib import Path
@@ -204,47 +205,62 @@ def create_app(
                 conversation.teacher_notification_error = None if delivered else error
                 db.commit()
 
+    async def call_customer_method(method, *args):
+        """Run blocking client methods in a worker, awaiting async variants safely."""
+        if inspect.iscoroutinefunction(method):
+            return await method(*args)
+        result = await asyncio.to_thread(method, *args)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    def process_customer_message(message: dict) -> tuple[str | None, str | None, bool]:
+        if message.get("msgtype") != "text":
+            return None, None, False
+        external = message.get("external_userid") or message.get("external_user_id") or ""
+        message_id = message.get("msgid") or ""
+        text = (message.get("text") or {}).get("content", "")
+        if not external or not message_id:
+            return None, None, False
+        with application.state.session_factory() as db:
+            process_parent_text(
+                db, customer_client, secret_key=application.state.secret_key,
+                external_user_id=external, message_id=message_id, text=text,
+                image_store=application.state.image_store,
+                assistant_provider=application.state.chat_provider,
+            )
+            inbound = db.scalar(select(FamilyMessage).where(
+                FamilyMessage.channel_message_id == message_id,
+                FamilyMessage.direction == "inbound",
+                FamilyMessage.sender_type == "guardian",
+            ))
+            conversation_id = inbound.conversation_id if inbound else None
+            inbound_message_id = inbound.message_id if inbound else None
+            failed_delivery = bool(inbound and any(
+                row.status == "failed"
+                for row in family_conversations.outbound_for_inbound(db, inbound.message_id)
+            ))
+        return conversation_id, inbound_message_id, failed_delivery
+
     async def process_customer_token(token: str) -> None:
         if customer_client is None:
             raise RuntimeError("微信客服客户端未配置")
         try:
-            batch = customer_client.sync_messages(None, token)
+            batch = await call_customer_method(customer_client.sync_messages, None, token)
             while True:
                 for message in batch.messages:
-                    if message.get("msgtype") != "text":
-                        continue
-                    external = message.get("external_userid") or message.get("external_user_id") or ""
-                    message_id = message.get("msgid") or ""
-                    text = (message.get("text") or {}).get("content", "")
-                    if not external or not message_id:
-                        continue
-                    with application.state.session_factory() as db:
-                        process_parent_text(
-                            db, customer_client, secret_key=application.state.secret_key,
-                            external_user_id=external, message_id=message_id, text=text,
-                            image_store=application.state.image_store,
-                            assistant_provider=application.state.chat_provider,
-                        )
-                        inbound = db.scalar(select(FamilyMessage).where(
-                            FamilyMessage.channel_message_id == message_id,
-                            FamilyMessage.direction == "inbound",
-                            FamilyMessage.sender_type == "guardian",
-                        ))
-                        conversation_id = inbound.conversation_id if inbound else None
-                        inbound_message_id = inbound.message_id if inbound else None
-                        failed_delivery = bool(inbound and any(
-                            row.status == "failed"
-                            for row in family_conversations.outbound_for_inbound(
-                                db, inbound.message_id
-                            )
-                        ))
+                    conversation_id, inbound_message_id, failed_delivery = await asyncio.to_thread(
+                        process_customer_message, message
+                    )
                     if failed_delivery:
                         application.state.wecom_customer_last_error_at = datetime.now(timezone.utc).isoformat()
                     if conversation_id and inbound_message_id:
                         await notify_waiting_teacher(conversation_id, inbound_message_id)
                 if not batch.has_more:
                     break
-                batch = customer_client.sync_messages(batch.next_cursor, token)
+                batch = await call_customer_method(
+                    customer_client.sync_messages, batch.next_cursor, token
+                )
         except Exception as exc:  # noqa: BLE001 - callback responses are sanitized
             application.state.wecom_customer_last_error_at = datetime.now(timezone.utc).isoformat()
             logger.warning("WeCom customer sync failed type=%s", type(exc).__name__)
