@@ -147,6 +147,35 @@ def test_revoked_teacher_cannot_reply(db_session, pending_conversation):
     assert customer.texts == []
 
 
+@pytest.mark.parametrize("revoked_relation", ["channel", "student_guardian"])
+def test_revoked_parent_access_cannot_receive_teacher_reply(
+    db_session, pending_conversation, revoked_relation
+):
+    if revoked_relation == "channel":
+        binding = db_session.query(GuardianChannelBinding).filter_by(
+            external_user_id="EXT-PARENT"
+        ).one()
+        binding.status = "revoked"
+    else:
+        relation = db_session.query(StudentGuardian).filter_by(
+            student_id="S1", guardian_id="G1"
+        ).one()
+        relation.status = "revoked"
+    db_session.commit()
+    customer = Customer()
+
+    event = process_family_reply_command(
+        db_session, "WX-TEACHER", "回复 FAM-1 已了解", customer
+    )
+
+    from app.family.models import FamilyMessage
+    assert event.content == "家长绑定已失效，无法发送回复。"
+    assert customer.texts == []
+    assert db_session.query(FamilyMessage).filter_by(
+        conversation_id="FAM-1", sender_type="teacher", direction="outbound"
+    ).count() == 0
+
+
 def test_customer_delivery_failure_is_recorded(db_session, pending_conversation):
     event = process_family_reply_command(
         db_session, "WX-TEACHER", "回复 FAM-1 已了解", Customer(fails=True)
