@@ -458,7 +458,7 @@ def process_parent_text(
         if students:
             binding.pending_state_json = _dump({"step": "awaiting_student"})
             db.commit()
-            return _choice_prompt(db, guardian.guardian_id)
+            return _send_simple(customer, external, _choice_prompt(db, guardian.guardian_id))
         return _send_simple(customer, external, _reply("【机器人回复】目前没有可访问的学生，请联系老师。"))
 
     deterministic_intent = any(

@@ -473,3 +473,18 @@ def test_unbound_prompt_is_sent_and_revoked_pending_does_not_raise(
     )
     assert result[0].content.startswith("【机器人回复】请先发送管理员")
     assert customer.sent[-1][1] == result[0].content
+
+
+def test_bound_parent_without_active_student_receives_child_choice_prompt(
+    db_session, student, teacher
+):
+    binding = _bind_external_parent(db_session, student, teacher, "EXT-NO-ACTIVE")
+    binding.active_student_id = None
+    db_session.commit()
+    customer = RecordingCustomer()
+    result = process_parent_text(
+        db_session, customer, secret_key="test-invitation-secret",
+        external_user_id="EXT-NO-ACTIVE", message_id="N1", text="查看图片",
+    )
+    assert result[0].content.startswith("【机器人回复】请选择孩子序号")
+    assert customer.sent == [("EXT-NO-ACTIVE", result[0].content)]
