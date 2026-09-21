@@ -10,8 +10,16 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from app.chat.generation import GenerationCoordinator
+from app.family.storage import LocalImageStore
 from app.wecom.config import WecomConfig
 from app.wecom.handler import BotEvent, process_scope_choice, process_text
+from app.wecom.media_handler import (
+    download_and_decrypt_images,
+    is_bound_teacher,
+    parse_media_message,
+    process_media_choice,
+    process_teacher_media,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +63,7 @@ class WecomGateway:
         binding_secret: str,
         client_factory: Callable[[WecomConfig], object] | None = None,
         generation_coordinator: GenerationCoordinator | None = None,
+        image_store: LocalImageStore | None = None,
     ) -> None:
         self.config = config
         self.session_factory = session_factory
@@ -62,6 +71,9 @@ class WecomGateway:
         self.binding_secret = binding_secret
         self.client_factory = client_factory or _default_client_factory
         self.generation_coordinator = generation_coordinator or GenerationCoordinator()
+        self.image_store = image_store or LocalImageStore(
+            config.media_root, max_bytes=config.media_max_bytes
+        )
         self.client = None
         self.connected = False
         self.authenticated = False
@@ -94,11 +106,14 @@ class WecomGateway:
         async def _text(frame):
             await self._handle_text(frame)
 
+        for event_name in ("message.image", "message.mixed"):
+            @self.client.on(event_name)
+            async def _media(frame):
+                await self._handle_media(frame)
+
         for event_name in (
-            "message.image",
             "message.voice",
             "message.file",
-            "message.mixed",
             "message.video",
         ):
             @self.client.on(event_name)
@@ -221,8 +236,33 @@ class WecomGateway:
         user_id = (body.get("from") or {}).get("userid", "")
         event = body.get("event") or {}
         detail = event.get("template_card_event") or event
-        match = re.fullmatch(r"scope_(\d+)", detail.get("event_key", ""))
-        if not user_id or not body.get("msgid") or match is None:
+        event_key = detail.get("event_key", "")
+        media_match = re.fullmatch(r"media_(PMA_[a-f0-9]{32})_(S[A-Za-z0-9_-]{0,159})", event_key)
+        scope_match = re.fullmatch(r"scope_(\d+)", event_key)
+        if not user_id or not body.get("msgid") or (media_match is None and scope_match is None):
+            return
+        if media_match is not None:
+            task_id = detail.get("task_id") or f"media_{media_match.group(1)}"
+            await self.client.update_template_card(
+                frame,
+                {"card_type": "text_notice", "main_title": {"title": "选择已收到", "desc": "正在归档图片"}, "task_id": task_id},
+            )
+            async with self._user_locks[user_id]:
+                try:
+                    def choose():
+                        with self.session_factory() as db:
+                            return process_media_choice(
+                                db, self.image_store, wecom_user_id=user_id,
+                                event_key=event_key,
+                            )
+                    result = await asyncio.to_thread(choose)
+                except Exception as exc:  # noqa: BLE001 - exception text may contain media URLs
+                    logger.error("WeCom media choice failed type=%s", type(exc).__name__)
+                    result = None
+                content = result.content if result else "处理失败，请稍后重试。"
+                await self.client.send_message(
+                    user_id, {"msgtype": "markdown", "markdown": {"content": content}}
+                )
             return
         task_id = detail.get("task_id") or "scope_choice"
         await self.client.update_template_card(
@@ -246,7 +286,7 @@ class WecomGateway:
                             self.binding_secret,
                             body["msgid"],
                             user_id,
-                            int(match.group(1)),
+                            int(scope_match.group(1)),
                             public_base_url=self.config.public_base_url,
                             coordinator=self.generation_coordinator,
                         ):
@@ -279,3 +319,61 @@ class WecomGateway:
                     {"msgtype": "markdown", "markdown": {"content": result.content}},
                 )
             await producer
+
+    async def _handle_media(self, frame: dict) -> None:
+        body = frame.get("body") or {}
+        user_id = (body.get("from") or {}).get("userid", "")
+        if not body.get("msgid") or not user_id:
+            return
+        if body.get("chattype", "single") != "single":
+            await self.client.reply_stream(
+                frame, secrets.token_urlsafe(12), "图片归档仅支持老师私聊机器人。", True
+            )
+            return
+        async with self._user_locks[user_id]:
+            try:
+                parsed = parse_media_message(body)
+                def is_authorized():
+                    with self.session_factory() as db:
+                        return is_bound_teacher(db, user_id)
+                if not await asyncio.to_thread(is_authorized):
+                    await self.client.reply_stream(
+                        frame, secrets.token_urlsafe(12),
+                        "请先登录 Teaching Agent 并绑定老师账号。", True,
+                    )
+                    return
+                payloads = await download_and_decrypt_images(self.client, parsed)
+
+                def archive():
+                    with self.session_factory() as db:
+                        return process_teacher_media(
+                            db, self.image_store, binding_secret=self.binding_secret,
+                            wecom_user_id=user_id, parsed=parsed, payloads=payloads,
+                        )
+
+                result = await asyncio.to_thread(archive)
+            except Exception as exc:  # noqa: BLE001 - never expose URLs, keys, or message bodies
+                logger.warning("WeCom media ingestion failed type=%s", type(exc).__name__)
+                result = None
+            if result is None:
+                content = "图片处理失败，请检查格式和大小后重试。"
+            elif result.choices:
+                buttons = [
+                    {"text": name, "key": key, "style": 1}
+                    for _student_id, name, key in result.choices
+                ]
+                await self.client.reply_template_card(
+                    frame,
+                    {
+                        "card_type": "button_interaction",
+                        "main_title": {"title": "请选择图片所属学生", "desc": "未能从消息中识别学生"},
+                        "button_list": buttons,
+                        "task_id": f"media_{result.pending_id}",
+                    },
+                )
+                return
+            else:
+                content = result.content
+            await self.client.reply_stream(
+                frame, secrets.token_urlsafe(12), content, True
+            )
