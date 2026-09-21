@@ -54,6 +54,7 @@ def test_exact_student_id_takes_precedence_and_strips_match_token(media_env):
     assert result.status == "archived"
     assert image.student_id == "S1"
     assert image.caption == "今天的照片"
+    assert not list(store.root.glob(".media-*.tmp"))
 
 
 def test_unique_name_archives_and_ambiguous_name_creates_pending(media_env):
@@ -133,6 +134,7 @@ def test_archival_commit_failure_removes_saved_files_and_rows(media_env, monkeyp
     monkeypatch.setattr(db, "commit", real_commit)
     assert db.query(StudentImage).count() == 0
     assert not list(store.root.rglob("*.png"))
+    assert not list(store.root.glob(".media-*.tmp"))
 
 
 @pytest.mark.parametrize("payload", [b"not-image", b"\x89PNG\r\n\x1a\n" + b"x" * 100])

@@ -183,7 +183,10 @@ def archive_teacher_images(db: Session, store: LocalImageStore, *, teacher_id: s
         return _result("rejected", "图片格式或大小无效")
     note = clean_caption.strip() or None
     if student_id:
-        return _archive_staged(db, store, teacher_id=teacher_id, student_id=student_id, source=source_message_id, caption=note, paths=paths, metadata=metadata, moment=moment)
+        try:
+            return _archive_staged(db, store, teacher_id=teacher_id, student_id=student_id, source=source_message_id, caption=note, paths=paths, metadata=metadata, moment=moment)
+        finally:
+            _cleanup(store, paths)
     row = PendingMediaAssignment(teacher_id=teacher_id, source_message_id=source_message_id, caption=note,
         media_json=json.dumps(metadata), choices_json=json.dumps([c.__dict__ for c in choices], ensure_ascii=False),
         temporary_paths_json=json.dumps(paths), expires_at=(moment + timedelta(minutes=PENDING_MINUTES)).isoformat(), status="pending")
