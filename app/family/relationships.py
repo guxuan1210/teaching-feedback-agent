@@ -134,7 +134,9 @@ def sync_head_teacher_assignments(db: Session, on: date | None = None) -> int:
         .distinct()
     ).all()
 
-    desired = {(student_id, teacher_id): enrollment_id for enrollment_id, student_id, teacher_id in rows}
+    desired_sources: dict[tuple[str, str], set[int]] = {}
+    for enrollment_id, student_id, teacher_id in rows:
+        desired_sources.setdefault((student_id, teacher_id), set()).add(enrollment_id)
     active_assignments = db.scalars(
         select(StudentTeacherAssignment).where(
             StudentTeacherAssignment.status == "active",
@@ -147,7 +149,13 @@ def sync_head_teacher_assignments(db: Session, on: date | None = None) -> int:
         if assignment.origin != "class_sync":
             continue
         key = (assignment.student_id, assignment.teacher_id)
-        if desired.get(key) == assignment.source_enrollment_id:
+        sources = desired_sources.get(key)
+        if sources and assignment.source_enrollment_id in sources:
+            continue
+        if sources:
+            assignment.source_enrollment_id = min(sources)
+            assignment.updated_at = _utcnow()
+            changed += 1
             continue
         assignment.status = "revoked"
         assignment.end_date = max(effective, assignment.start_date)
@@ -155,7 +163,7 @@ def sync_head_teacher_assignments(db: Session, on: date | None = None) -> int:
         active_keys.discard(key)
         changed += 1
 
-    for (student_id, teacher_id), enrollment_id in desired.items():
+    for (student_id, teacher_id), enrollment_ids in desired_sources.items():
         if (student_id, teacher_id) in active_keys:
             continue
         db.add(
@@ -166,7 +174,7 @@ def sync_head_teacher_assignments(db: Session, on: date | None = None) -> int:
                 start_date=effective,
                 status="active",
                 origin="class_sync",
-                source_enrollment_id=enrollment_id,
+                source_enrollment_id=min(enrollment_ids),
             )
         )
         changed += 1

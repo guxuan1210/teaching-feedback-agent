@@ -4,6 +4,7 @@ schema versioning, and the shared declarative base."""
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Request
@@ -104,30 +105,125 @@ def _add_missing_columns(engine: Engine) -> None:
             conn.exec_driver_sql(
                 "ALTER TABLE chat_message ADD COLUMN channel VARCHAR"
             )
-        assignment_cols = {
+
+
+def _migrate_student_teacher_assignments(engine: Engine) -> None:
+    """Rebuild legacy assignment storage with source checks and safe uniqueness."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    with engine.connect() as conn:
+        table_sql = conn.exec_driver_sql(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='table' AND name='student_teacher_assignment'"
+        ).scalar_one_or_none()
+        conn.commit()
+        if table_sql is None:
+            return
+        columns = {
             row[1]
             for row in conn.exec_driver_sql(
                 "PRAGMA table_info(student_teacher_assignment)"
             )
         }
-        if assignment_cols and "origin" not in assignment_cols:
-            conn.exec_driver_sql(
-                "ALTER TABLE student_teacher_assignment "
-                "ADD COLUMN origin VARCHAR NOT NULL DEFAULT 'manual'"
-            )
-        if assignment_cols and "source_enrollment_id" not in assignment_cols:
-            conn.exec_driver_sql(
-                "ALTER TABLE student_teacher_assignment "
-                "ADD COLUMN source_enrollment_id INTEGER "
-                "REFERENCES enrollment(enrollment_id)"
-            )
-        if assignment_cols:
-            conn.exec_driver_sql(
-                "CREATE UNIQUE INDEX IF NOT EXISTS "
-                "uq_student_teacher_active_role "
-                "ON student_teacher_assignment(student_id, teacher_id, role) "
-                "WHERE status = 'active'"
-            )
+        conn.commit()
+        needs_rebuild = not {"origin", "source_enrollment_id"} <= columns or not (
+            "origin = 'manual'" in table_sql and "origin = 'class_sync'" in table_sql
+        )
+
+        if not needs_rebuild:
+            with conn.begin():
+                _canonicalize_active_assignments(conn, today)
+                _create_assignment_indexes(conn)
+            return
+
+        origin_sql = "old.origin" if "origin" in columns else "'manual'"
+        source_sql = (
+            "old.source_enrollment_id" if "source_enrollment_id" in columns else "NULL"
+        )
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        conn.commit()
+        try:
+            with conn.begin():
+                conn.exec_driver_sql("DROP TABLE IF EXISTS student_teacher_assignment_new")
+                conn.exec_driver_sql(
+                    "CREATE TABLE student_teacher_assignment_new ("
+                    "assignment_id VARCHAR PRIMARY KEY, "
+                    "student_id VARCHAR NOT NULL REFERENCES student(student_id), "
+                    "teacher_id VARCHAR NOT NULL REFERENCES teacher(teacher_id), "
+                    "role VARCHAR NOT NULL, start_date VARCHAR NOT NULL, "
+                    "end_date VARCHAR, status VARCHAR NOT NULL DEFAULT 'active', "
+                    "origin VARCHAR NOT NULL DEFAULT 'manual', "
+                    "source_enrollment_id INTEGER REFERENCES enrollment(enrollment_id), "
+                    "created_at VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, "
+                    "CONSTRAINT ck_student_teacher_assignment_role "
+                    "CHECK (role IN ('primary','subject','collaborator')), "
+                    "CONSTRAINT ck_student_teacher_assignment_dates "
+                    "CHECK (end_date IS NULL OR end_date >= start_date), "
+                    "CONSTRAINT ck_student_teacher_assignment_status "
+                    "CHECK (status IN ('active','revoked')), "
+                    "CONSTRAINT ck_student_teacher_assignment_origin CHECK ("
+                    "(origin = 'manual' AND source_enrollment_id IS NULL) OR "
+                    "(origin = 'class_sync' AND source_enrollment_id IS NOT NULL "
+                    "AND role = 'primary')))"
+                )
+                conn.exec_driver_sql(
+                    "WITH ranked AS ("
+                    "SELECT *, ROW_NUMBER() OVER ("
+                    "PARTITION BY student_id,teacher_id,role "
+                    "ORDER BY start_date,assignment_id) AS active_rank "
+                    "FROM student_teacher_assignment WHERE status='active') "
+                    "INSERT INTO student_teacher_assignment_new "
+                    "(assignment_id,student_id,teacher_id,role,start_date,end_date,"
+                    "status,origin,source_enrollment_id,created_at,updated_at) "
+                    "SELECT old.assignment_id,old.student_id,old.teacher_id,old.role,"
+                    "old.start_date,CASE WHEN ranked.active_rank > 1 THEN "
+                    "CASE WHEN old.start_date > :today THEN old.start_date ELSE :today END "
+                    "ELSE old.end_date END,CASE WHEN ranked.active_rank > 1 "
+                    "THEN 'revoked' ELSE old.status END,"
+                    f"{origin_sql},{source_sql},old.created_at,old.updated_at "
+                    "FROM student_teacher_assignment AS old "
+                    "LEFT JOIN ranked ON ranked.assignment_id=old.assignment_id",
+                    {"today": today},
+                )
+                conn.exec_driver_sql("DROP TABLE student_teacher_assignment")
+                conn.exec_driver_sql(
+                    "ALTER TABLE student_teacher_assignment_new "
+                    "RENAME TO student_teacher_assignment"
+                )
+                _create_assignment_indexes(conn)
+                violations = conn.exec_driver_sql(
+                    "PRAGMA foreign_key_check(student_teacher_assignment)"
+                ).all()
+                if violations:
+                    raise RuntimeError("student teacher assignment migration violated foreign keys")
+        finally:
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+            conn.commit()
+
+
+def _canonicalize_active_assignments(conn, today: str) -> None:
+    conn.exec_driver_sql(
+        "WITH ranked AS ("
+        "SELECT assignment_id,ROW_NUMBER() OVER ("
+        "PARTITION BY student_id,teacher_id,role "
+        "ORDER BY start_date,assignment_id) AS active_rank "
+        "FROM student_teacher_assignment WHERE status='active') "
+        "UPDATE student_teacher_assignment SET status='revoked', "
+        "end_date=CASE WHEN start_date > :today THEN start_date ELSE :today END "
+        "WHERE assignment_id IN (SELECT assignment_id FROM ranked WHERE active_rank > 1)",
+        {"today": today},
+    )
+
+
+def _create_assignment_indexes(conn) -> None:
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_student_teacher_assignment_lookup "
+        "ON student_teacher_assignment(teacher_id, student_id, status)"
+    )
+    conn.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_student_teacher_active_role "
+        "ON student_teacher_assignment(student_id, teacher_id, role) "
+        "WHERE status = 'active'"
+    )
 
 
 def _compose_legacy_parent_message(
@@ -233,6 +329,7 @@ def initialize_database(engine: Engine) -> None:
     _import_all_models()
     Base.metadata.create_all(engine)
     _add_missing_columns(engine)
+    _migrate_student_teacher_assignments(engine)
     _backfill_parent_message(engine)
     _backfill_teacher_chat_state(engine)
 

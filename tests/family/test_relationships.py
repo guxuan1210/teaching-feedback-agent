@@ -117,6 +117,39 @@ def test_sync_never_revokes_manual_primary_assignment(db_session):
     assert manual.status == "active"
 
 
+def test_sync_keeps_assignment_when_another_enrollment_supports_same_pair(db_session):
+    _teacher(db_session, "T1")
+    _student(db_session, "S1")
+    db_session.add_all([
+        Class(class_id="C1", name="一班", class_type="daily", head_teacher_id="T1", status="active"),
+        Class(class_id="C2", name="二班", class_type="daily", head_teacher_id="T1", status="active"),
+    ])
+    db_session.commit()
+    enrollments = [
+        Enrollment(student_id="S1", class_id="C1", start_date="2026-09-01", status="active"),
+        Enrollment(student_id="S1", class_id="C2", start_date="2026-09-01", status="active"),
+    ]
+    db_session.add_all(enrollments)
+    db_session.commit()
+    sync_head_teacher_assignments(db_session, on=date(2026, 9, 21))
+    assignment = db_session.query(StudentTeacherAssignment).one()
+    original_id = assignment.assignment_id
+    selected = next(row for row in enrollments if row.enrollment_id == assignment.source_enrollment_id)
+    remaining = next(row for row in enrollments if row is not selected)
+
+    selected.status = "left"
+    selected.end_date = "2026-09-21"
+    db_session.commit()
+    sync_head_teacher_assignments(db_session, on=date(2026, 9, 22))
+
+    rows = db_session.query(StudentTeacherAssignment).all()
+    assert len(rows) == 1
+    assert rows[0].assignment_id == original_id
+    assert rows[0].status == "active"
+    assert rows[0].source_enrollment_id == remaining.enrollment_id
+    assert sync_head_teacher_assignments(db_session, on=date(2026, 9, 22)) == 0
+
+
 def test_database_prevents_duplicate_active_assignment(db_session):
     _teacher(db_session, "T1")
     _student(db_session, "S1")

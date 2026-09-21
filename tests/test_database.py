@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -285,7 +286,12 @@ def test_v8_family_database_migrates_assignments_without_data_loss(tmp_path):
     connection.execute(
         "INSERT INTO student_teacher_assignment "
         "(assignment_id,student_id,teacher_id,role,start_date,status) "
-        "VALUES ('STA-V8','S-V8','T-V8','primary','2026-09-01','active')"
+        "VALUES ('STA-V8-A','S-V8','T-V8','primary','2026-09-01','active')"
+    )
+    connection.execute(
+        "INSERT INTO student_teacher_assignment "
+        "(assignment_id,student_id,teacher_id,role,start_date,status) "
+        "VALUES ('STA-V8-B','S-V8','T-V8','primary','2026-09-02','active')"
     )
     connection.execute("PRAGMA user_version = 8")
     connection.commit()
@@ -311,17 +317,38 @@ def test_v8_family_database_migrates_assignments_without_data_loss(tmp_path):
         item["name"] == "uq_student_teacher_active_role" and item["unique"]
         for item in inspector.get_indexes("student_teacher_assignment")
     )
+    assignment_checks = " ".join(
+        item["sqltext"]
+        for item in inspector.get_check_constraints("student_teacher_assignment")
+    )
+    assert "origin = 'manual'" in assignment_checks
+    assert "origin = 'class_sync'" in assignment_checks
     with engine.begin() as upgraded:
         assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 9
-        row = upgraded.exec_driver_sql(
-            "SELECT assignment_id,origin,source_enrollment_id "
-            "FROM student_teacher_assignment WHERE assignment_id='STA-V8'"
-        ).one()
-        assert tuple(row) == ("STA-V8", "manual", None)
+        rows = upgraded.exec_driver_sql(
+            "SELECT assignment_id,start_date,end_date,status,origin,source_enrollment_id "
+            "FROM student_teacher_assignment ORDER BY assignment_id"
+        ).all()
+        assert [row.assignment_id for row in rows] == ["STA-V8-A", "STA-V8-B"]
+        assert sum(row.status == "active" for row in rows) == 1
+        assert all(row.origin == "manual" and row.source_enrollment_id is None for row in rows)
+        assert next(row for row in rows if row.status == "active").assignment_id == "STA-V8-A"
+        revoked = next(row for row in rows if row.status == "revoked")
+        assert revoked.end_date == max(
+            revoked.start_date, datetime.now(timezone.utc).date().isoformat()
+        )
+        assert upgraded.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
         with pytest.raises(IntegrityError):
             upgraded.exec_driver_sql(
                 "INSERT INTO student_teacher_assignment "
                 "(assignment_id,student_id,teacher_id,role,start_date,status) "
                 "VALUES ('STA-DUP','S-V8','T-V8','primary','2026-09-02','active')"
+            )
+    with engine.begin() as upgraded:
+        with pytest.raises(IntegrityError):
+            upgraded.exec_driver_sql(
+                "INSERT INTO student_teacher_assignment "
+                "(assignment_id,student_id,teacher_id,role,start_date,status,origin) "
+                "VALUES ('STA-BAD','S-V8','T-V8','subject','2026-09-02','revoked','bogus')"
             )
     engine.dispose()

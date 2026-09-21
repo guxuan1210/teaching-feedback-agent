@@ -3,6 +3,7 @@
 -- 本文件是可执行 SQLAlchemy 模型（app/*/models.py）的忠实镜像，
 -- Schema version 9，共 34 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
 -- v8 升级时既有 guardian_invitation.max_uses 保持原列定义；服务始终显式写入 1。
+-- v8 重复 active 教师关系全部保留；按 start_date、assignment_id 最早者继续 active，其余撤销。
 -- =====================================================================
 
 PRAGMA foreign_keys = ON;
