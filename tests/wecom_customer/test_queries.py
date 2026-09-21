@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+from sqlalchemy import event
+
 from app.family.invitations import create_guardian_invitation
 from app.family.models import (
     FamilyConversation, FamilyMessage, GuardianChannelBinding, StudentGuardian,
@@ -88,6 +91,96 @@ def test_recent_images_only_returns_authorized_student_images(db_session, studen
     assert "课堂作品" in " ".join(reply.content for reply in replies)
     assert customer.uploaded == [(b"jpeg-bytes", "IMG1.jpg")]
     assert customer.sent == [("EXT1", "MEDIA-1")]
+
+
+def test_replay_completes_image_reply_batch_after_mid_generation_crash(
+    db_session, student, teacher, tmp_path
+):
+    _admin(db_session, teacher)
+    _, code = create_guardian_invitation(
+        db_session, student.student_id, teacher.teacher_id, secret_key=SECRET
+    )
+    binding = _bind(db_session, student, teacher, code)
+    db_session.add(StudentImage(
+        image_id="IMG-BATCH", student_id=student.student_id,
+        uploaded_by_teacher_id=teacher.teacher_id, source_message_id="SRC-BATCH",
+        source_position=0, caption="作品", mime_type="image/jpeg", extension=".jpg",
+        byte_size=3, sha256="b" * 64, storage_path="S1/batch.jpg", status="active",
+    ))
+    db_session.commit()
+    image_root = tmp_path / "student_media"
+    image_root.mkdir()
+    image_path = image_root / "S1" / "batch.jpg"
+    image_path.parent.mkdir()
+    image_path.write_bytes(b"jpg")
+
+    def crash_before_outbox_commit(session, flush_context, instances):
+        if any(
+            isinstance(row, FamilyMessage)
+            and row.direction == "outbound"
+            and row.reply_to_message_id is not None
+            for row in session.new
+        ):
+            raise RuntimeError("simulated interruption between reply parts")
+
+    event.listen(db_session, "before_flush", crash_before_outbox_commit)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        process_parent_text(
+            db_session, object(), secret_key=SECRET, external_user_id="EXT1",
+            message_id="M-BATCH", text="看最近的图片",
+            image_store=LocalImageStore(image_root),
+        )
+    event.remove(db_session, "before_flush", crash_before_outbox_commit)
+    db_session.rollback()
+    inbound = db_session.query(FamilyMessage).filter_by(channel_message_id="M-BATCH").one()
+    assert db_session.query(FamilyMessage).filter_by(
+        reply_to_message_id=inbound.message_id, direction="outbound"
+    ).count() == 0
+
+    # Recreate the legacy partial state: the caption action committed but the
+    # image action did not. Reprocessing must fill the missing image action only.
+    conversation = db_session.query(FamilyConversation).filter_by(
+        guardian_id=binding.guardian_id, student_id=student.student_id
+    ).one()
+    from app.family.parent_assistant import answer_parent_query
+    caption = answer_parent_query(
+        db_session, guardian_id=binding.guardian_id,
+        student_id=student.student_id, text="看最近的图片",
+    )[0]
+    db_session.add(FamilyMessage(
+        conversation_id=conversation.conversation_id, direction="outbound",
+        sender_type="bot", content=caption.content,
+        reply_to_message_id=inbound.message_id, status="pending",
+    ))
+    db_session.commit()
+
+    class Customer:
+        def __init__(self):
+            self.texts = []
+            self.images = []
+        def send_text(self, external_user_id, content):
+            self.texts.append(content)
+            return f"TEXT-{len(self.texts)}"
+        def upload_image(self, content, filename): return "MEDIA-1"
+        def send_image(self, external_user_id, media_id):
+            self.images.append((external_user_id, media_id))
+            return "IMAGE-1"
+
+    customer = Customer()
+    replies = process_parent_text(
+        db_session, customer, secret_key=SECRET, external_user_id="EXT1",
+        message_id="M-BATCH", text="看最近的图片",
+        image_store=LocalImageStore(image_root),
+    )
+    actions = db_session.query(FamilyMessage).filter_by(
+        reply_to_message_id=inbound.message_id, direction="outbound"
+    ).all()
+    assert len(actions) == 2
+    assert sum(action.image_id == "IMG-BATCH" for action in actions) == 1
+    assert sum(action.image_id is None for action in actions) == 1
+    assert len(customer.texts) == 1
+    assert customer.images == [("EXT1", "MEDIA-1")]
+    assert len(replies) == 2
 
 
 def test_latest_weekly_report_query_never_returns_draft(db_session, report_scope, report_draft):

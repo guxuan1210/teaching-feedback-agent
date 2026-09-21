@@ -184,11 +184,9 @@ def _queue_query_replies(
     replies = answer_parent_query(
         db, guardian_id=guardian_id, student_id=student_id, text=text,
     )
+    actions: list[tuple[str, str | None]] = []
     for reply in replies:
-        conversations.record_bot_reply(
-            db, conversation.conversation_id, reply.content,
-            reply_to_message_id=inbound.message_id,
-        )
+        actions.append((reply.content, None))
         if reply.image_path:
             image = db.scalar(select(StudentImage).where(
                 StudentImage.student_id == student_id,
@@ -196,12 +194,12 @@ def _queue_query_replies(
                 StudentImage.status == "active",
             ))
             if image is not None:
-                conversations.record_bot_reply(
-                    db, conversation.conversation_id, reply.content,
-                    reply_to_message_id=inbound.message_id, image_id=image.image_id,
-                )
-    if any(reply.handoff_marker for reply in replies):
-        conversations.request_teacher_reply(db, conversation.conversation_id, text)
+                actions.append((reply.content, image.image_id))
+    conversations.record_bot_reply_batch(
+        db, conversation.conversation_id, actions,
+        reply_to_message_id=inbound.message_id,
+        waiting_teacher=any(reply.handoff_marker for reply in replies),
+    )
     return replies
 
 
@@ -209,11 +207,12 @@ def _queue_simple_replies(
     db: Session, conversation: FamilyConversation, inbound: FamilyMessage,
     customer, external_user_id: str, image_store, replies: list[ParentReply],
 ) -> list[ParentReply]:
-    for reply in replies:
-        conversations.record_bot_reply(
-            db, conversation.conversation_id, reply.content,
-            reply_to_message_id=inbound.message_id,
-        )
+    conversations.record_bot_reply_batch(
+        db, conversation.conversation_id,
+        [(reply.content, None) for reply in replies],
+        reply_to_message_id=inbound.message_id,
+        waiting_teacher=any(reply.handoff_marker for reply in replies),
+    )
     _deliver_outbox(db, customer, external_user_id, image_store, inbound.channel_message_id)
     return _replies_for_inbound(db, inbound)
 
@@ -260,7 +259,11 @@ def process_parent_text(
         replayable_text = duplicate.content not in (
             "[邀请码已核销]", *_RELATIONSHIPS.keys()
         )
-        if not saved and replayable_text:
+        deterministic_query = any(
+            token in duplicate.content
+            for token in ("图片", "反馈", "周报", "请老师回复", "转老师")
+        )
+        if replayable_text and (not saved or deterministic_query):
             binding = db.scalar(select(GuardianChannelBinding).where(
                 GuardianChannelBinding.channel == "wecom_customer",
                 GuardianChannelBinding.external_user_id == external,

@@ -102,6 +102,45 @@ def record_bot_reply(
     )
 
 
+def record_bot_reply_batch(
+    db: Session, conversation_id: str,
+    actions: list[tuple[str, str | None]], *, reply_to_message_id: str,
+    waiting_teacher: bool = False,
+) -> list[FamilyMessage]:
+    """Atomically persist every part of one inbound answer before delivery."""
+    conversation = db.get(FamilyConversation, conversation_id)
+    if conversation is None:
+        raise ValueError("家庭会话不存在")
+    existing = list(db.scalars(select(FamilyMessage).where(
+        FamilyMessage.reply_to_message_id == reply_to_message_id,
+        FamilyMessage.direction == "outbound",
+        FamilyMessage.sender_type == "bot",
+    )))
+    rows: list[FamilyMessage] = []
+    unmatched = list(existing)
+    for content, image_id in actions:
+        label = _label(content, "【机器人回复】")
+        match = next((row for row in unmatched if row.content == label and row.image_id == image_id), None)
+        if match is not None:
+            unmatched.remove(match)
+            continue
+        rows.append(FamilyMessage(
+            conversation_id=conversation_id, direction="outbound", sender_type="bot",
+            content=label, image_id=image_id,
+            reply_to_message_id=reply_to_message_id, status="pending",
+        ))
+    db.add_all(rows)
+    if waiting_teacher:
+        conversation.status = "waiting_teacher"
+        conversation.updated_at = _now()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return rows
+
+
 def request_teacher_reply(
     db: Session, conversation_id: str, reason: str
 ) -> FamilyConversation:
