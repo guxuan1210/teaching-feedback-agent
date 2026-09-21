@@ -1,7 +1,7 @@
 -- =====================================================================
 -- 教学反馈数据采集 Demo · 数据库 Schema（SQLite）
 -- 本文件是可执行 SQLAlchemy 模型（app/*/models.py）的忠实镜像，
--- 共 23 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
+-- 共 34 张表。业务数据不硬删除：学生/老师/班级停用，反馈作废。
 -- =====================================================================
 
 PRAGMA foreign_keys = ON;
@@ -340,4 +340,144 @@ CREATE TABLE IF NOT EXISTS wecom_inbound_message (
     status        TEXT NOT NULL,
     received_at   TEXT NOT NULL,
     completed_at  TEXT
+);
+
+-- ---------------------------------------------------------------------
+-- 26-29. 家长、学生关系、渠道绑定与邀请码
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS guardian (
+    guardian_id      TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    relationship_type TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'active',
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK (relationship_type IN ('father', 'mother', 'other')),
+    CHECK (status IN ('active', 'inactive'))
+);
+
+CREATE TABLE IF NOT EXISTS student_guardian (
+    relation_id TEXT PRIMARY KEY,
+    student_id  TEXT NOT NULL REFERENCES student(student_id) ON DELETE CASCADE,
+    guardian_id TEXT NOT NULL REFERENCES guardian(guardian_id) ON DELETE CASCADE,
+    status      TEXT NOT NULL DEFAULT 'active',
+    bound_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    revoked_at  TEXT,
+    UNIQUE (student_id, guardian_id),
+    CHECK (status IN ('active', 'revoked'))
+);
+
+CREATE TABLE IF NOT EXISTS guardian_channel_binding (
+    binding_id        TEXT PRIMARY KEY,
+    channel           TEXT NOT NULL,
+    external_user_id  TEXT NOT NULL,
+    guardian_id       TEXT REFERENCES guardian(guardian_id) ON DELETE SET NULL,
+    active_student_id TEXT REFERENCES student(student_id) ON DELETE SET NULL,
+    pending_state_json TEXT,
+    status            TEXT NOT NULL DEFAULT 'pending',
+    bound_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (channel, external_user_id),
+    CHECK (status IN ('pending', 'active', 'revoked'))
+);
+
+CREATE TABLE IF NOT EXISTS guardian_invitation (
+    invitation_id        TEXT PRIMARY KEY,
+    student_id           TEXT NOT NULL REFERENCES student(student_id) ON DELETE CASCADE,
+    code_hash            TEXT NOT NULL UNIQUE,
+    expires_at           TEXT NOT NULL,
+    max_uses             INTEGER NOT NULL,
+    used_count           INTEGER NOT NULL DEFAULT 0,
+    revoked_at           TEXT,
+    created_by_teacher_id TEXT NOT NULL REFERENCES teacher(teacher_id),
+    created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- ---------------------------------------------------------------------
+-- 30-32. 学生教师分配、图片与待分配媒体
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS student_teacher_assignment (
+    assignment_id TEXT PRIMARY KEY,
+    student_id    TEXT NOT NULL REFERENCES student(student_id) ON DELETE CASCADE,
+    teacher_id    TEXT NOT NULL REFERENCES teacher(teacher_id) ON DELETE CASCADE,
+    role          TEXT NOT NULL,
+    start_date    TEXT NOT NULL,
+    end_date      TEXT,
+    status        TEXT NOT NULL DEFAULT 'active',
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK (role IN ('primary', 'subject', 'collaborator')),
+    CHECK (end_date IS NULL OR end_date >= start_date),
+    CHECK (status IN ('active', 'revoked'))
+);
+
+CREATE TABLE IF NOT EXISTS student_image (
+    image_id               TEXT PRIMARY KEY,
+    student_id             TEXT NOT NULL REFERENCES student(student_id) ON DELETE CASCADE,
+    uploaded_by_teacher_id TEXT NOT NULL REFERENCES teacher(teacher_id),
+    source_message_id      TEXT NOT NULL,
+    source_position        INTEGER NOT NULL,
+    caption                TEXT,
+    mime_type              TEXT NOT NULL,
+    extension              TEXT NOT NULL,
+    byte_size              INTEGER NOT NULL,
+    sha256                 TEXT NOT NULL,
+    storage_path           TEXT NOT NULL,
+    status                 TEXT NOT NULL DEFAULT 'active',
+    uploaded_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    deleted_at             TEXT,
+    deleted_by_teacher_id  TEXT REFERENCES teacher(teacher_id) ON DELETE SET NULL,
+    UNIQUE (source_message_id, source_position),
+    CHECK (status IN ('active', 'deleted'))
+);
+
+CREATE TABLE IF NOT EXISTS pending_media_assignment (
+    pending_id          TEXT PRIMARY KEY,
+    teacher_id         TEXT NOT NULL REFERENCES teacher(teacher_id) ON DELETE CASCADE,
+    source_message_id   TEXT NOT NULL UNIQUE,
+    caption             TEXT,
+    media_json          TEXT NOT NULL,
+    choices_json        TEXT NOT NULL,
+    temporary_paths_json TEXT NOT NULL,
+    expires_at          TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK (status IN ('pending', 'completed', 'expired'))
+);
+
+-- ---------------------------------------------------------------------
+-- 33-34. 家校会话与消息
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS family_conversation (
+    conversation_id        TEXT PRIMARY KEY,
+    guardian_id            TEXT NOT NULL REFERENCES guardian(guardian_id) ON DELETE CASCADE,
+    student_id             TEXT NOT NULL REFERENCES student(student_id) ON DELETE CASCADE,
+    assigned_teacher_id    TEXT REFERENCES teacher(teacher_id) ON DELETE SET NULL,
+    channel                TEXT NOT NULL,
+    channel_conversation_id TEXT NOT NULL,
+    status                 TEXT NOT NULL DEFAULT 'active',
+    last_message_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    created_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (guardian_id, student_id, channel, channel_conversation_id),
+    CHECK (status IN ('active', 'waiting_teacher', 'closed'))
+);
+
+CREATE TABLE IF NOT EXISTS family_message (
+    message_id         TEXT PRIMARY KEY,
+    conversation_id    TEXT NOT NULL REFERENCES family_conversation(conversation_id) ON DELETE CASCADE,
+    direction          TEXT NOT NULL,
+    sender_type        TEXT NOT NULL,
+    sender_id          TEXT,
+    content            TEXT NOT NULL,
+    image_id           TEXT REFERENCES student_image(image_id) ON DELETE SET NULL,
+    channel_message_id TEXT UNIQUE,
+    status             TEXT NOT NULL DEFAULT 'pending',
+    failure_reason     TEXT,
+    created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    sent_at            TEXT,
+    CHECK (direction IN ('inbound', 'outbound')),
+    CHECK (sender_type IN ('guardian', 'bot', 'teacher')),
+    CHECK (status IN ('pending', 'completed', 'failed'))
 );

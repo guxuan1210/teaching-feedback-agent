@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.catalog.models import Student
 from app.core.database import (
+    SCHEMA_VERSION,
     _compose_legacy_parent_message,
     build_engine,
     initialize_database,
@@ -16,6 +17,10 @@ from app.feedback.models import DailyFeedback
 def test_foreign_keys_are_enabled(db_session):
     enabled = db_session.connection().exec_driver_sql("PRAGMA foreign_keys").scalar_one()
     assert enabled == 1
+
+
+def test_schema_version_is_eight():
+    assert SCHEMA_VERSION == 8
 
 
 def test_compose_legacy_parent_message_uses_deterministic_format():
@@ -141,7 +146,7 @@ def test_schema_sql_mirrors_current_model_fields():
     assert "parent_message" in schema
     assert "generation_note" in schema
     assert "finalized_at" in schema
-    assert "共 23 张表" in schema
+    assert "共 34 张表" in schema
     assert "channel" in schema
     for table in (
         "stage_dict",
@@ -159,5 +164,14 @@ def test_schema_sql_mirrors_current_model_fields():
         "wecom_binding_code",
         "wecom_chat_state",
         "wecom_inbound_message",
+        "guardian",
+        "student_guardian",
+        "guardian_channel_binding",
+        "guardian_invitation",
+        "student_teacher_assignment",
+        "student_image",
+        "pending_media_assignment",
+        "family_conversation",
+        "family_message",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in schema
