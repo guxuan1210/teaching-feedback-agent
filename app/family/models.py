@@ -4,10 +4,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.ids import new_id
 
 
 def _utcnow() -> str:
@@ -17,7 +26,9 @@ def _utcnow() -> str:
 class Guardian(Base):
     __tablename__ = "guardian"
 
-    guardian_id: Mapped[str] = mapped_column(String, primary_key=True)
+    guardian_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("G")
+    )
     name: Mapped[str] = mapped_column(String, nullable=False)
     relationship_type: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
@@ -38,12 +49,14 @@ class Guardian(Base):
 class StudentGuardian(Base):
     __tablename__ = "student_guardian"
 
-    relation_id: Mapped[str] = mapped_column(String, primary_key=True)
+    relation_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("SG")
+    )
     student_id: Mapped[str] = mapped_column(
-        String, ForeignKey("student.student_id", ondelete="CASCADE"), nullable=False
+        String, ForeignKey("student.student_id"), nullable=False
     )
     guardian_id: Mapped[str] = mapped_column(
-        String, ForeignKey("guardian.guardian_id", ondelete="CASCADE"), nullable=False
+        String, ForeignKey("guardian.guardian_id"), nullable=False
     )
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
     bound_at: Mapped[str] = mapped_column(String, nullable=False, default=_utcnow)
@@ -54,17 +67,20 @@ class StudentGuardian(Base):
         CheckConstraint(
             "status IN ('active','revoked')", name="ck_student_guardian_status"
         ),
+        Index("ix_student_guardian_guardian_status", "guardian_id", "status"),
     )
 
 
 class GuardianChannelBinding(Base):
     __tablename__ = "guardian_channel_binding"
 
-    binding_id: Mapped[str] = mapped_column(String, primary_key=True)
+    binding_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("GCB")
+    )
     channel: Mapped[str] = mapped_column(String, nullable=False)
     external_user_id: Mapped[str] = mapped_column(String, nullable=False)
     guardian_id: Mapped[str | None] = mapped_column(
-        String, ForeignKey("guardian.guardian_id", ondelete="SET NULL")
+        String, ForeignKey("guardian.guardian_id")
     )
     active_student_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("student.student_id", ondelete="SET NULL")
@@ -82,15 +98,21 @@ class GuardianChannelBinding(Base):
             "status IN ('pending','active','revoked')",
             name="ck_guardian_channel_binding_status",
         ),
+        CheckConstraint(
+            "status != 'active' OR guardian_id IS NOT NULL",
+            name="ck_guardian_channel_binding_active_guardian",
+        ),
     )
 
 
 class GuardianInvitation(Base):
     __tablename__ = "guardian_invitation"
 
-    invitation_id: Mapped[str] = mapped_column(String, primary_key=True)
+    invitation_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("GI")
+    )
     student_id: Mapped[str] = mapped_column(
-        String, ForeignKey("student.student_id", ondelete="CASCADE"), nullable=False
+        String, ForeignKey("student.student_id"), nullable=False
     )
     code_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     expires_at: Mapped[str] = mapped_column(String, nullable=False)
@@ -102,16 +124,26 @@ class GuardianInvitation(Base):
     )
     created_at: Mapped[str] = mapped_column(String, nullable=False, default=_utcnow)
 
+    __table_args__ = (
+        CheckConstraint("max_uses > 0", name="ck_guardian_invitation_max_uses"),
+        CheckConstraint("used_count >= 0", name="ck_guardian_invitation_used_count"),
+        CheckConstraint(
+            "used_count <= max_uses", name="ck_guardian_invitation_uses_limit"
+        ),
+    )
+
 
 class StudentTeacherAssignment(Base):
     __tablename__ = "student_teacher_assignment"
 
-    assignment_id: Mapped[str] = mapped_column(String, primary_key=True)
+    assignment_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("STA")
+    )
     student_id: Mapped[str] = mapped_column(
-        String, ForeignKey("student.student_id", ondelete="CASCADE"), nullable=False
+        String, ForeignKey("student.student_id"), nullable=False
     )
     teacher_id: Mapped[str] = mapped_column(
-        String, ForeignKey("teacher.teacher_id", ondelete="CASCADE"), nullable=False
+        String, ForeignKey("teacher.teacher_id"), nullable=False
     )
     role: Mapped[str] = mapped_column(String, nullable=False)
     start_date: Mapped[str] = mapped_column(String, nullable=False)
@@ -135,15 +167,23 @@ class StudentTeacherAssignment(Base):
             "status IN ('active','revoked')",
             name="ck_student_teacher_assignment_status",
         ),
+        Index(
+            "ix_student_teacher_assignment_lookup",
+            "teacher_id",
+            "student_id",
+            "status",
+        ),
     )
 
 
 class StudentImage(Base):
     __tablename__ = "student_image"
 
-    image_id: Mapped[str] = mapped_column(String, primary_key=True)
+    image_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("IMG")
+    )
     student_id: Mapped[str] = mapped_column(
-        String, ForeignKey("student.student_id", ondelete="CASCADE"), nullable=False
+        String, ForeignKey("student.student_id"), nullable=False
     )
     uploaded_by_teacher_id: Mapped[str] = mapped_column(
         String, ForeignKey("teacher.teacher_id"), nullable=False
@@ -170,15 +210,30 @@ class StudentImage(Base):
         CheckConstraint(
             "status IN ('active','deleted')", name="ck_student_image_status"
         ),
+        CheckConstraint(
+            "(status = 'active' AND deleted_at IS NULL "
+            "AND deleted_by_teacher_id IS NULL) OR "
+            "(status = 'deleted' AND deleted_at IS NOT NULL "
+            "AND deleted_by_teacher_id IS NOT NULL)",
+            name="ck_student_image_deletion_metadata",
+        ),
+        Index(
+            "ix_student_image_student_status_uploaded",
+            "student_id",
+            "status",
+            "uploaded_at",
+        ),
     )
 
 
 class PendingMediaAssignment(Base):
     __tablename__ = "pending_media_assignment"
 
-    pending_id: Mapped[str] = mapped_column(String, primary_key=True)
+    pending_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("PMA")
+    )
     teacher_id: Mapped[str] = mapped_column(
-        String, ForeignKey("teacher.teacher_id", ondelete="CASCADE"), nullable=False
+        String, ForeignKey("teacher.teacher_id"), nullable=False
     )
     source_message_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     caption: Mapped[str | None] = mapped_column(Text)
@@ -203,12 +258,14 @@ class PendingMediaAssignment(Base):
 class FamilyConversation(Base):
     __tablename__ = "family_conversation"
 
-    conversation_id: Mapped[str] = mapped_column(String, primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("FC")
+    )
     guardian_id: Mapped[str] = mapped_column(
-        String, ForeignKey("guardian.guardian_id", ondelete="CASCADE"), nullable=False
+        String, ForeignKey("guardian.guardian_id"), nullable=False
     )
     student_id: Mapped[str] = mapped_column(
-        String, ForeignKey("student.student_id", ondelete="CASCADE"), nullable=False
+        String, ForeignKey("student.student_id"), nullable=False
     )
     assigned_teacher_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("teacher.teacher_id", ondelete="SET NULL")
@@ -240,10 +297,12 @@ class FamilyConversation(Base):
 class FamilyMessage(Base):
     __tablename__ = "family_message"
 
-    message_id: Mapped[str] = mapped_column(String, primary_key=True)
+    message_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("FM")
+    )
     conversation_id: Mapped[str] = mapped_column(
         String,
-        ForeignKey("family_conversation.conversation_id", ondelete="CASCADE"),
+        ForeignKey("family_conversation.conversation_id"),
         nullable=False,
     )
     direction: Mapped[str] = mapped_column(String, nullable=False)
@@ -270,5 +329,31 @@ class FamilyMessage(Base):
         CheckConstraint(
             "status IN ('pending','completed','failed')",
             name="ck_family_message_status",
+        ),
+        CheckConstraint(
+            "(direction = 'inbound' AND sender_type = 'guardian') OR "
+            "(direction = 'outbound' AND sender_type IN ('bot','teacher'))",
+            name="ck_family_message_direction_sender",
+        ),
+        CheckConstraint(
+            "(status = 'failed' AND failure_reason IS NOT NULL) OR "
+            "(status != 'failed' AND failure_reason IS NULL)",
+            name="ck_family_message_failure_reason",
+        ),
+        CheckConstraint(
+            "direction != 'outbound' OR status != 'completed' OR sent_at IS NOT NULL",
+            name="ck_family_message_completed_sent_at",
+        ),
+        CheckConstraint(
+            "status != 'pending' OR sent_at IS NULL",
+            name="ck_family_message_pending_sent_at",
+        ),
+        CheckConstraint(
+            "(sender_type = 'bot' AND sender_id IS NULL) OR "
+            "(sender_type IN ('guardian','teacher') AND sender_id IS NOT NULL)",
+            name="ck_family_message_sender_id",
+        ),
+        Index(
+            "ix_family_message_conversation_created", "conversation_id", "created_at"
         ),
     )

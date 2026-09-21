@@ -1,7 +1,8 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.exc import IntegrityError
 
 from app.catalog.models import Student
@@ -175,3 +176,69 @@ def test_schema_sql_mirrors_current_model_fields():
         "family_message",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in schema
+
+
+def test_schema_sql_executes_and_exposes_family_structure(tmp_path):
+    path = tmp_path / "schema.db"
+    schema = Path("db/schema.sql").read_text(encoding="utf-8")
+    connection = sqlite3.connect(path)
+    connection.executescript(schema)
+    connection.close()
+
+    engine = create_engine(f"sqlite+pysqlite:///{path.as_posix()}")
+    inspector = inspect(engine)
+    assert len(inspector.get_table_names()) == 34
+    binding_columns = {
+        column["name"] for column in inspector.get_columns("guardian_channel_binding")
+    }
+    assert {"active_student_id", "pending_state_json"} <= binding_columns
+    assert {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("student_image")
+    } >= {("source_message_id", "source_position")}
+    image_foreign_keys = {
+        (
+            tuple(item["constrained_columns"]),
+            item["referred_table"],
+            item["options"].get("ondelete"),
+        )
+        for item in inspector.get_foreign_keys("student_image")
+    }
+    assert (("student_id",), "student", None) in image_foreign_keys
+    message_checks = " ".join(
+        item["sqltext"] for item in inspector.get_check_constraints("family_message")
+    )
+    assert "direction = 'inbound' AND sender_type = 'guardian'" in message_checks
+    message_indexes = {
+        tuple(item["column_names"]) for item in inspector.get_indexes("family_message")
+    }
+    assert ("conversation_id", "created_at") in message_indexes
+    engine.dispose()
+
+
+def test_v7_database_upgrades_to_v8_with_family_tables(tmp_path):
+    path = tmp_path / "v7.db"
+    schema = Path("db/schema.sql").read_text(encoding="utf-8")
+    legacy_schema = schema.split("CREATE TABLE IF NOT EXISTS guardian (", 1)[0]
+    connection = sqlite3.connect(path)
+    connection.executescript(legacy_schema)
+    connection.execute("PRAGMA user_version = 7")
+    connection.close()
+
+    engine = build_engine(f"sqlite+pysqlite:///{path.as_posix()}")
+    initialize_database(engine)
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) >= {
+        "guardian",
+        "student_guardian",
+        "guardian_channel_binding",
+        "guardian_invitation",
+        "student_teacher_assignment",
+        "student_image",
+        "pending_media_assignment",
+        "family_conversation",
+        "family_message",
+    }
+    with engine.connect() as upgraded:
+        assert upgraded.exec_driver_sql("PRAGMA user_version").scalar_one() == 8
+    engine.dispose()
