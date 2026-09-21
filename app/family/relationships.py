@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.catalog.models import Class, Enrollment, Student, Teacher
@@ -80,9 +81,14 @@ def assign_teacher(
         start_date=start,
         end_date=None,
         status="active",
+        origin="manual",
     )
     db.add(assignment)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ValueError("同一学生、教师和角色已有有效关系") from exc
     return assignment
 
 
@@ -108,11 +114,11 @@ def revoke_teacher_assignment(
 
 
 def sync_head_teacher_assignments(db: Session, on: date | None = None) -> int:
-    """Add missing primary assignments for current active class enrollment."""
+    """Reconcile class-derived primary assignments with the active roster."""
     effective_date = on or date.today()
     effective = effective_date.isoformat()
     rows = db.execute(
-        select(Enrollment.student_id, Class.head_teacher_id)
+        select(Enrollment.enrollment_id, Enrollment.student_id, Class.head_teacher_id)
         .join(Class, Class.class_id == Enrollment.class_id)
         .join(Student, Student.student_id == Enrollment.student_id)
         .join(Teacher, Teacher.teacher_id == Class.head_teacher_id)
@@ -128,24 +134,29 @@ def sync_head_teacher_assignments(db: Session, on: date | None = None) -> int:
         .distinct()
     ).all()
 
-    added = 0
-    for student_id, teacher_id in rows:
-        exists = db.scalar(
-            select(StudentTeacherAssignment.assignment_id)
-            .where(
-                StudentTeacherAssignment.student_id == student_id,
-                StudentTeacherAssignment.teacher_id == teacher_id,
-                StudentTeacherAssignment.role == "primary",
-                StudentTeacherAssignment.status == "active",
-                StudentTeacherAssignment.start_date <= effective,
-                or_(
-                    StudentTeacherAssignment.end_date.is_(None),
-                    StudentTeacherAssignment.end_date >= effective,
-                ),
-            )
-            .limit(1)
+    desired = {(student_id, teacher_id): enrollment_id for enrollment_id, student_id, teacher_id in rows}
+    active_assignments = db.scalars(
+        select(StudentTeacherAssignment).where(
+            StudentTeacherAssignment.status == "active",
+            StudentTeacherAssignment.role == "primary",
         )
-        if exists is not None:
+    ).all()
+    active_keys = {(row.student_id, row.teacher_id) for row in active_assignments}
+    changed = 0
+    for assignment in active_assignments:
+        if assignment.origin != "class_sync":
+            continue
+        key = (assignment.student_id, assignment.teacher_id)
+        if desired.get(key) == assignment.source_enrollment_id:
+            continue
+        assignment.status = "revoked"
+        assignment.end_date = max(effective, assignment.start_date)
+        assignment.updated_at = _utcnow()
+        active_keys.discard(key)
+        changed += 1
+
+    for (student_id, teacher_id), enrollment_id in desired.items():
+        if (student_id, teacher_id) in active_keys:
             continue
         db.add(
             StudentTeacherAssignment(
@@ -154,9 +165,15 @@ def sync_head_teacher_assignments(db: Session, on: date | None = None) -> int:
                 role="primary",
                 start_date=effective,
                 status="active",
+                origin="class_sync",
+                source_enrollment_id=enrollment_id,
             )
         )
-        added += 1
-    if added:
-        db.commit()
-    return added
+        changed += 1
+    if changed:
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise ValueError("教师关系同步发生并发冲突，请重试") from exc
+    return changed

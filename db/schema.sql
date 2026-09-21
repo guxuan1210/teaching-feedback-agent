@@ -389,7 +389,7 @@ CREATE TABLE IF NOT EXISTS guardian_invitation (
     student_id           TEXT NOT NULL REFERENCES student(student_id),
     code_hash            TEXT NOT NULL UNIQUE,
     expires_at           TEXT NOT NULL,
-    max_uses             INTEGER NOT NULL,
+    max_uses             INTEGER NOT NULL DEFAULT 1,
     used_count           INTEGER NOT NULL DEFAULT 0,
     revoked_at           TEXT,
     created_by_teacher_id TEXT NOT NULL REFERENCES teacher(teacher_id),
@@ -410,14 +410,20 @@ CREATE TABLE IF NOT EXISTS student_teacher_assignment (
     start_date    TEXT NOT NULL,
     end_date      TEXT,
     status        TEXT NOT NULL DEFAULT 'active',
+    origin        TEXT NOT NULL DEFAULT 'manual',
+    source_enrollment_id INTEGER REFERENCES enrollment(enrollment_id),
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     CHECK (role IN ('primary', 'subject', 'collaborator')),
     CHECK (end_date IS NULL OR end_date >= start_date),
-    CHECK (status IN ('active', 'revoked'))
+    CHECK (status IN ('active', 'revoked')),
+    CHECK ((origin = 'manual' AND source_enrollment_id IS NULL)
+        OR (origin = 'class_sync' AND source_enrollment_id IS NOT NULL AND role = 'primary'))
 );
 CREATE INDEX IF NOT EXISTS ix_student_teacher_assignment_lookup
     ON student_teacher_assignment(teacher_id, student_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_student_teacher_assignment_active
+    ON student_teacher_assignment(student_id, teacher_id, role) WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS student_image (
     image_id               TEXT PRIMARY KEY,
@@ -434,7 +440,7 @@ CREATE TABLE IF NOT EXISTS student_image (
     status                 TEXT NOT NULL DEFAULT 'active',
     uploaded_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     deleted_at             TEXT,
-    deleted_by_teacher_id  TEXT REFERENCES teacher(teacher_id) ON DELETE SET NULL,
+    deleted_by_teacher_id  TEXT REFERENCES teacher(teacher_id),
     UNIQUE (source_message_id, source_position),
     CHECK (status IN ('active', 'deleted')),
     CHECK ((status = 'active' AND deleted_at IS NULL AND deleted_by_teacher_id IS NULL)

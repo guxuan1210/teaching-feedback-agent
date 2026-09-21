@@ -192,6 +192,15 @@ def test_schema_sql_executes_and_exposes_family_structure(tmp_path):
         column["name"] for column in inspector.get_columns("guardian_channel_binding")
     }
     assert {"active_student_id", "pending_state_json"} <= binding_columns
+    assignment_columns = {column["name"] for column in inspector.get_columns("student_teacher_assignment")}
+    assert {"origin", "source_enrollment_id"} <= assignment_columns
+    assignment_foreign_keys = {
+        (tuple(item["constrained_columns"]), item["referred_table"])
+        for item in inspector.get_foreign_keys("student_teacher_assignment")
+    }
+    assert (("source_enrollment_id",), "enrollment") in assignment_foreign_keys
+    invitation_defaults = {column["name"]: column["default"] for column in inspector.get_columns("guardian_invitation")}
+    assert invitation_defaults["max_uses"] == "1"
     assert {
         tuple(item["column_names"])
         for item in inspector.get_unique_constraints("student_image")
@@ -205,6 +214,7 @@ def test_schema_sql_executes_and_exposes_family_structure(tmp_path):
         for item in inspector.get_foreign_keys("student_image")
     }
     assert (("student_id",), "student", None) in image_foreign_keys
+    assert (("deleted_by_teacher_id",), "teacher", None) in image_foreign_keys
     message_checks = " ".join(
         item["sqltext"] for item in inspector.get_check_constraints("family_message")
     )

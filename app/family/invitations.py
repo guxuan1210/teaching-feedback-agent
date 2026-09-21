@@ -8,6 +8,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.catalog.models import Student, Teacher
@@ -18,7 +19,6 @@ from app.family.models import (
     GuardianInvitation,
     StudentGuardian,
 )
-from app.family.permissions import teacher_can_access_student
 
 
 CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
@@ -34,6 +34,24 @@ RELATIONSHIPS = {
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("时间必须包含时区信息")
+    return value.astimezone(timezone.utc)
+
+
+def _utc_iso(value: datetime) -> str:
+    return _utc_datetime(value).isoformat()
+
+
+def _stored_utc(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("邀请码时间格式无效") from exc
+    return _utc_datetime(parsed)
 
 
 def _normalized_code(code: str | None) -> str:
@@ -82,15 +100,13 @@ def create_guardian_invitation(
 ) -> tuple[GuardianInvitation, str]:
     """Create a single-use invitation while persisting only its HMAC digest."""
     secret = _require_secret(secret_key)
-    current = now or _now()
+    current = _utc_datetime(now or _now())
     if ttl <= timedelta(0):
         raise ValueError("邀请码有效期必须大于零")
     _active_student(db, student_id)
     teacher = _active_teacher(db, created_by_teacher_id)
-    if teacher.role not in ADMIN_ROLES and not teacher_can_access_student(
-        db, created_by_teacher_id, student_id, current.date()
-    ):
-        raise ValueError("教师没有权限为该学生创建邀请码")
+    if teacher.role not in ADMIN_ROLES:
+        raise ValueError("仅管理员或校区负责人可创建邀请码")
 
     while True:
         code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
@@ -105,14 +121,18 @@ def create_guardian_invitation(
     invitation = GuardianInvitation(
         student_id=student_id,
         code_hash=code_hash,
-        expires_at=(current + ttl).isoformat(),
+        expires_at=_utc_iso(current + ttl),
         max_uses=1,
         used_count=0,
         created_by_teacher_id=created_by_teacher_id,
-        created_at=current.isoformat(),
+        created_at=_utc_iso(current),
     )
     db.add(invitation)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ValueError("邀请码生成冲突，请重试") from exc
     return invitation, code
 
 
@@ -125,6 +145,7 @@ def redeem_guardian_invitation(
     *,
     secret_key: str,
     now: datetime | None = None,
+    _retry_on_conflict: bool = True,
 ) -> Guardian:
     """Atomically claim an invitation and bind or reuse its guardian identity."""
     secret = _require_secret(secret_key)
@@ -142,7 +163,7 @@ def redeem_guardian_invitation(
     relation_type = RELATIONSHIPS.get((relationship or "").strip())
     if relation_type is None:
         raise ValueError("监护人关系无效")
-    current = now or _now()
+    current = _utc_datetime(now or _now())
     code_hash = _digest(normalized, secret)
     invitation = db.scalar(
         select(GuardianInvitation).where(GuardianInvitation.code_hash == code_hash)
@@ -151,7 +172,7 @@ def redeem_guardian_invitation(
         raise ValueError("邀请码无效")
     if invitation.revoked_at is not None:
         raise ValueError("邀请码已撤销")
-    if datetime.fromisoformat(invitation.expires_at) <= current:
+    if _stored_utc(invitation.expires_at) <= current:
         raise ValueError("邀请码已过期")
     if invitation.used_count >= invitation.max_uses:
         raise ValueError("邀请码已使用")
@@ -180,8 +201,8 @@ def redeem_guardian_invitation(
             name=name,
             relationship_type=relation_type,
             status="active",
-            created_at=current.isoformat(),
-            updated_at=current.isoformat(),
+            created_at=_utc_iso(current),
+            updated_at=_utc_iso(current),
         )
         db.add(guardian)
         db.flush()
@@ -191,8 +212,8 @@ def redeem_guardian_invitation(
                 external_user_id=external_id,
                 guardian_id=guardian.guardian_id,
                 status="active",
-                bound_at=current.isoformat(),
-                updated_at=current.isoformat(),
+                bound_at=_utc_iso(current),
+                updated_at=_utc_iso(current),
             )
             db.add(binding)
         else:
@@ -209,19 +230,31 @@ def redeem_guardian_invitation(
             student_id=invitation.student_id,
             guardian_id=guardian.guardian_id,
             status="active",
-            bound_at=current.isoformat(),
+            bound_at=_utc_iso(current),
         )
         db.add(relation)
     else:
         relation.status = "active"
         relation.revoked_at = None
-        relation.bound_at = current.isoformat()
+        relation.bound_at = _utc_iso(current)
 
+    previous_binding_status = binding.status
     binding.status = "active"
     binding.active_student_id = invitation.student_id
     binding.pending_state_json = None
-    binding.updated_at = current.isoformat()
-    db.flush()
+    binding.updated_at = _utc_iso(current)
+    if previous_binding_status in {"pending", "revoked"}:
+        binding.bound_at = _utc_iso(current)
+    try:
+        db.flush()
+    except (IntegrityError, OperationalError) as exc:
+        db.rollback()
+        if _retry_on_conflict:
+            return redeem_guardian_invitation(
+                db, code, external_user_id, relationship, guardian_name,
+                secret_key=secret_key, now=current, _retry_on_conflict=False,
+            )
+        raise ValueError("监护人绑定发生并发冲突，请重试") from exc
 
     claimed = db.execute(
         update(GuardianInvitation)
@@ -229,7 +262,7 @@ def redeem_guardian_invitation(
             GuardianInvitation.invitation_id == invitation.invitation_id,
             GuardianInvitation.code_hash == code_hash,
             GuardianInvitation.revoked_at.is_(None),
-            GuardianInvitation.expires_at > current.isoformat(),
+            GuardianInvitation.expires_at > _utc_iso(current),
             GuardianInvitation.used_count < GuardianInvitation.max_uses,
         )
         .values(used_count=GuardianInvitation.used_count + 1)
@@ -237,7 +270,16 @@ def redeem_guardian_invitation(
     if claimed.rowcount != 1:
         db.rollback()
         raise ValueError("邀请码已使用或失效")
-    db.commit()
+    try:
+        db.commit()
+    except (IntegrityError, OperationalError) as exc:
+        db.rollback()
+        if _retry_on_conflict:
+            return redeem_guardian_invitation(
+                db, code, external_user_id, relationship, guardian_name,
+                secret_key=secret_key, now=current, _retry_on_conflict=False,
+            )
+        raise ValueError("监护人绑定发生并发冲突，请重试") from exc
     db.refresh(invitation)
     return guardian
 

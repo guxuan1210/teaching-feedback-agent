@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -116,7 +117,7 @@ class GuardianInvitation(Base):
     )
     code_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     expires_at: Mapped[str] = mapped_column(String, nullable=False)
-    max_uses: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     revoked_at: Mapped[str | None] = mapped_column(String)
     created_by_teacher_id: Mapped[str] = mapped_column(
@@ -149,6 +150,10 @@ class StudentTeacherAssignment(Base):
     start_date: Mapped[str] = mapped_column(String, nullable=False)
     end_date: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
+    origin: Mapped[str] = mapped_column(String, nullable=False, default="manual", server_default="manual")
+    source_enrollment_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("enrollment.enrollment_id")
+    )
     created_at: Mapped[str] = mapped_column(String, nullable=False, default=_utcnow)
     updated_at: Mapped[str] = mapped_column(
         String, nullable=False, default=_utcnow, onupdate=_utcnow
@@ -166,6 +171,17 @@ class StudentTeacherAssignment(Base):
         CheckConstraint(
             "status IN ('active','revoked')",
             name="ck_student_teacher_assignment_status",
+        ),
+        CheckConstraint(
+            "(origin = 'manual' AND source_enrollment_id IS NULL) OR "
+            "(origin = 'class_sync' AND source_enrollment_id IS NOT NULL AND role = 'primary')",
+            name="ck_student_teacher_assignment_origin",
+        ),
+        Index(
+            "uq_student_teacher_assignment_active",
+            "student_id", "teacher_id", "role",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
         ),
         Index(
             "ix_student_teacher_assignment_lookup",
@@ -200,7 +216,7 @@ class StudentImage(Base):
     uploaded_at: Mapped[str] = mapped_column(String, nullable=False, default=_utcnow)
     deleted_at: Mapped[str | None] = mapped_column(String)
     deleted_by_teacher_id: Mapped[str | None] = mapped_column(
-        String, ForeignKey("teacher.teacher_id", ondelete="SET NULL")
+        String, ForeignKey("teacher.teacher_id")
     )
 
     __table_args__ = (

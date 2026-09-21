@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.sql.dml import Update
 
 from app.catalog.models import Student, Teacher
+from app.core.database import build_session_factory
 from app.family.invitations import (
     create_guardian_invitation,
     redeem_guardian_invitation,
@@ -25,7 +27,7 @@ NOW = datetime(2026, 9, 21, 8, 0, tzinfo=timezone.utc)
 SECRET = "test-secret"
 
 
-def _scope(db, *, teacher_role="晚辅教师"):
+def _scope(db, *, teacher_role="管理员"):
     teacher = Teacher(teacher_id="T1", name="老师", role=teacher_role, status="active")
     student = Student(student_id="S1", name="学生", status="active")
     db.add_all([teacher, student])
@@ -232,6 +234,7 @@ def test_revoked_binding_reuses_guardian_and_rejects_identity_conflict(db_sessio
     assert db_session.query(Guardian).count() == 1
     assert binding.guardian_id == guardian.guardian_id
     assert binding.status == "active"
+    assert binding.bound_at == NOW.isoformat()
     assert invitation.used_count == 1
 
     conflict_invitation, conflict_code = create_guardian_invitation(
@@ -323,7 +326,7 @@ def test_create_validates_inputs_status_and_teacher_scope(db_session):
     teacher2 = Teacher(teacher_id="T2", name="无权限", role="晚辅教师", status="active")
     db_session.add(teacher2)
     db_session.commit()
-    with pytest.raises(ValueError, match="权限"):
+    with pytest.raises(ValueError, match="管理员|校区负责人"):
         create_guardian_invitation(db_session, "S1", "T2", secret_key=SECRET, now=NOW)
 
     student.status = "inactive"
@@ -336,6 +339,79 @@ def test_create_validates_inputs_status_and_teacher_scope(db_session):
     db_session.commit()
     with pytest.raises(ValueError, match="教师.*停用"):
         create_guardian_invitation(db_session, "S1", "T1", secret_key=SECRET, now=NOW)
+
+
+def test_regular_teacher_cannot_create_invitation_even_with_assignment(db_session):
+    _scope(db_session, teacher_role="晚辅教师")
+    with pytest.raises(ValueError, match="管理员|校区负责人"):
+        create_guardian_invitation(db_session, "S1", "T1", secret_key=SECRET, now=NOW)
+
+
+@pytest.mark.parametrize("role", ["管理员", "校区负责人"])
+def test_admin_roles_can_create_invitation(db_session, role):
+    _scope(db_session, teacher_role=role)
+    invitation, _ = create_guardian_invitation(db_session, "S1", "T1", secret_key=SECRET, now=NOW)
+    assert invitation.created_by_teacher_id == "T1"
+
+
+def test_invitation_rejects_naive_datetimes(db_session):
+    _scope(db_session)
+    naive = datetime(2026, 9, 21, 8, 0)
+    with pytest.raises(ValueError, match="时区"):
+        create_guardian_invitation(db_session, "S1", "T1", secret_key=SECRET, now=naive)
+    _, code = create_guardian_invitation(db_session, "S1", "T1", secret_key=SECRET, now=NOW)
+    with pytest.raises(ValueError, match="时区"):
+        redeem_guardian_invitation(db_session, code, "WX-NAIVE", "father", "家长", secret_key=SECRET, now=naive)
+
+
+def test_timezone_is_normalized_to_utc_and_exact_expiry_is_invalid(db_session):
+    _scope(db_session)
+    local_now = datetime(2026, 9, 21, 16, 0, tzinfo=timezone(timedelta(hours=8)))
+    invitation, code = create_guardian_invitation(
+        db_session, "S1", "T1", secret_key=SECRET, now=local_now, ttl=timedelta(minutes=5)
+    )
+    assert invitation.created_at == "2026-09-21T08:00:00+00:00"
+    assert invitation.expires_at == "2026-09-21T08:05:00+00:00"
+    with pytest.raises(ValueError, match="过期"):
+        redeem_guardian_invitation(
+            db_session, code, "WX-BOUNDARY", "father", "家长",
+            secret_key=SECRET, now=datetime(2026, 9, 21, 16, 5, tzinfo=timezone(timedelta(hours=8))),
+        )
+
+
+def test_real_unique_binding_race_rolls_back_and_keeps_session_usable(db_session, engine):
+    _scope(db_session)
+    invitation, code = create_guardian_invitation(
+        db_session, "S1", "T1", secret_key=SECRET, now=NOW
+    )
+    rival = build_session_factory(engine)()
+
+    def insert_rival_binding(session, flush_context, instances):
+        rival_guardian = Guardian(name="另一身份", relationship_type="mother", status="active")
+        rival.add(rival_guardian)
+        rival.flush()
+        rival.add(GuardianChannelBinding(
+            channel="wecom_customer", external_user_id="WX-RACE-REAL",
+            guardian_id=rival_guardian.guardian_id, status="active",
+        ))
+        rival.commit()
+
+    event.listen(db_session, "before_flush", insert_rival_binding, once=True)
+    try:
+        with pytest.raises(ValueError, match="身份.*冲突"):
+            redeem_guardian_invitation(
+                db_session, code, "WX-RACE-REAL", "father", "王先生",
+                secret_key=SECRET, now=NOW,
+            )
+    finally:
+        rival.close()
+
+    db_session.refresh(invitation)
+    assert invitation.used_count == 0
+    assert db_session.query(Guardian).count() == 1
+    assert db_session.query(StudentGuardian).count() == 0
+    db_session.query(Guardian).one().updated_at = (NOW + timedelta(minutes=1)).isoformat()
+    db_session.commit()
 
 
 def test_redeem_validates_blank_fields_and_relationship(db_session):
@@ -364,12 +440,12 @@ def test_redeem_rejects_non_ascii_code_with_clear_error(db_session):
 
 
 def test_only_active_admin_can_revoke_and_repeated_revoke_is_idempotent(db_session):
-    _scope(db_session)
+    _scope(db_session, teacher_role="晚辅教师")
     admin = Teacher(teacher_id="ADMIN", name="管理员", role="校区负责人", status="active")
     db_session.add(admin)
     db_session.commit()
     invitation, _ = create_guardian_invitation(
-        db_session, "S1", "T1", secret_key=SECRET, now=NOW
+        db_session, "S1", "ADMIN", secret_key=SECRET, now=NOW
     )
 
     with pytest.raises(ValueError, match="管理员"):

@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
+from app.catalog.models import Enrollment
 from app.family.models import (
     FamilyConversation,
     FamilyMessage,
@@ -39,7 +40,7 @@ def test_family_tables_expose_required_check_constraints(engine):
         "guardian": {"relationship_type IN", "status IN"},
         "student_guardian": {"status IN"},
         "guardian_channel_binding": {"status IN"},
-        "student_teacher_assignment": {"role IN", "status IN", "end_date IS NULL"},
+        "student_teacher_assignment": {"role IN", "status IN", "end_date IS NULL", "origin"},
         "student_image": {"status IN"},
         "pending_media_assignment": {"status IN"},
         "family_conversation": {"status IN"},
@@ -90,6 +91,57 @@ def test_family_tables_expose_high_frequency_indexes(engine):
             if not index["unique"]
         }
         assert indexes <= actual, (table, actual)
+
+
+def test_assignment_origin_shape_and_active_uniqueness(engine, db_session, student, teacher):
+    columns = {column["name"]: column for column in inspect(engine).get_columns("student_teacher_assignment")}
+    assert columns["origin"]["default"] is not None
+    assert columns["source_enrollment_id"]["nullable"]
+    unique_indexes = [item for item in inspect(engine).get_indexes("student_teacher_assignment") if item["unique"]]
+    assert any(tuple(item["column_names"]) == ("student_id", "teacher_id", "role") for item in unique_indexes)
+
+
+@pytest.mark.parametrize(
+    "origin,source_enrollment_id,role",
+    [("manual", 1, "primary"), ("class_sync", None, "primary"), ("class_sync", 1, "subject")],
+)
+def test_assignment_origin_requires_valid_source_shape(
+    db_session, student, teacher, classroom, origin, source_enrollment_id, role
+):
+    enrollment = Enrollment(
+        student_id=student.student_id, class_id=classroom.class_id,
+        start_date="2026-09-01", status="active",
+    )
+    db_session.add(enrollment)
+    db_session.commit()
+    if source_enrollment_id is not None:
+        source_enrollment_id = enrollment.enrollment_id
+    db_session.add(StudentTeacherAssignment(
+        student_id=student.student_id, teacher_id=teacher.teacher_id, role=role,
+        start_date="2026-09-21", origin=origin, source_enrollment_id=source_enrollment_id,
+    ))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+def test_revoked_assignment_history_can_repeat(db_session, student, teacher):
+    common = dict(
+        student_id=student.student_id, teacher_id=teacher.teacher_id, role="primary",
+        start_date="2026-09-01", end_date="2026-09-02", status="revoked",
+    )
+    db_session.add_all([StudentTeacherAssignment(**common), StudentTeacherAssignment(**common)])
+    db_session.commit()
+    assert db_session.query(StudentTeacherAssignment).count() == 2
+
+
+def test_guardian_invitation_max_uses_defaults_to_one(db_session, student, teacher):
+    row = GuardianInvitation(
+        student_id=student.student_id, code_hash="default-uses",
+        expires_at="2026-09-22T00:00:00+00:00", created_by_teacher_id=teacher.teacher_id,
+    )
+    db_session.add(row)
+    db_session.commit()
+    assert row.max_uses == 1
 
 
 def test_guardian_rejects_invalid_relationship_type(db_session):

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.catalog.models import Class, Enrollment, Student, Teacher
 from app.family.models import Guardian, StudentGuardian, StudentTeacherAssignment
@@ -57,6 +58,72 @@ def test_syncs_current_head_teacher_assignment_and_is_idempotent(db_session):
         "S1", "T1", "primary"
     )
     assert assignment.start_date == "2026-09-21"
+    assert assignment.origin == "class_sync"
+    assert assignment.source_enrollment_id is not None
+
+
+def test_sync_revokes_assignment_when_student_leaves(db_session):
+    teacher = _teacher(db_session, "T1")
+    student = _student(db_session, "S1")
+    classroom = Class(class_id="C1", name="一班", class_type="daily", head_teacher_id="T1", status="active")
+    db_session.add(classroom)
+    db_session.commit()
+    enrollment = Enrollment(student_id="S1", class_id="C1", start_date="2026-09-01", status="active")
+    db_session.add(enrollment)
+    db_session.commit()
+    sync_head_teacher_assignments(db_session, on=date(2026, 9, 21))
+
+    enrollment.status = "left"
+    enrollment.end_date = "2026-09-21"
+    db_session.commit()
+    sync_head_teacher_assignments(db_session, on=date(2026, 9, 21))
+
+    assignment = db_session.query(StudentTeacherAssignment).one()
+    assert assignment.status == "revoked"
+    assert assignment.end_date >= assignment.start_date
+    assert not teacher_can_access_student(db_session, "T1", "S1", date(2026, 9, 21))
+
+
+def test_sync_tracks_head_teacher_change_and_class_deactivation(db_session):
+    _teacher(db_session, "T1")
+    _teacher(db_session, "T2")
+    _student(db_session, "S1")
+    classroom = Class(class_id="C1", name="一班", class_type="daily", head_teacher_id="T1", status="active")
+    db_session.add(classroom)
+    db_session.commit()
+    db_session.add(Enrollment(student_id="S1", class_id="C1", start_date="2026-09-01", status="active"))
+    db_session.commit()
+    sync_head_teacher_assignments(db_session, on=date(2026, 9, 21))
+
+    classroom.head_teacher_id = "T2"
+    db_session.commit()
+    sync_head_teacher_assignments(db_session, on=date(2026, 9, 22))
+    assert not teacher_can_access_student(db_session, "T1", "S1", date(2026, 9, 22))
+    assert teacher_can_access_student(db_session, "T2", "S1", date(2026, 9, 22))
+
+    classroom.status = "inactive"
+    db_session.commit()
+    sync_head_teacher_assignments(db_session, on=date(2026, 9, 23))
+    assert not teacher_can_access_student(db_session, "T2", "S1", date(2026, 9, 23))
+
+
+def test_sync_never_revokes_manual_primary_assignment(db_session):
+    _teacher(db_session, "T1")
+    _student(db_session, "S1")
+    manual = assign_teacher(db_session, "S1", "T1", "primary", date(2026, 9, 1))
+    assert sync_head_teacher_assignments(db_session, on=date(2026, 9, 21)) == 0
+    db_session.refresh(manual)
+    assert manual.origin == "manual"
+    assert manual.status == "active"
+
+
+def test_database_prevents_duplicate_active_assignment(db_session):
+    _teacher(db_session, "T1")
+    _student(db_session, "S1")
+    common = dict(student_id="S1", teacher_id="T1", role="primary", start_date="2026-09-01")
+    db_session.add_all([StudentTeacherAssignment(**common), StudentTeacherAssignment(**common)])
+    with pytest.raises(IntegrityError):
+        db_session.commit()
 
 
 def test_sync_ignores_historical_enrollment(db_session):
