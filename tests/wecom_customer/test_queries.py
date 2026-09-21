@@ -100,7 +100,7 @@ def test_replay_completes_image_reply_batch_after_mid_generation_crash(
     _, code = create_guardian_invitation(
         db_session, student.student_id, teacher.teacher_id, secret_key=SECRET
     )
-    binding = _bind(db_session, student, teacher, code)
+    _bind(db_session, student, teacher, code)
     db_session.add(StudentImage(
         image_id="IMG-BATCH", student_id=student.student_id,
         uploaded_by_teacher_id=teacher.teacher_id, source_message_id="SRC-BATCH",
@@ -137,23 +137,6 @@ def test_replay_completes_image_reply_batch_after_mid_generation_crash(
         reply_to_message_id=inbound.message_id, direction="outbound"
     ).count() == 0
 
-    # Recreate the legacy partial state: the caption action committed but the
-    # image action did not. Reprocessing must fill the missing image action only.
-    conversation = db_session.query(FamilyConversation).filter_by(
-        guardian_id=binding.guardian_id, student_id=student.student_id
-    ).one()
-    from app.family.parent_assistant import answer_parent_query
-    caption = answer_parent_query(
-        db_session, guardian_id=binding.guardian_id,
-        student_id=student.student_id, text="看最近的图片",
-    )[0]
-    db_session.add(FamilyMessage(
-        conversation_id=conversation.conversation_id, direction="outbound",
-        sender_type="bot", content=caption.content,
-        reply_to_message_id=inbound.message_id, status="pending",
-    ))
-    db_session.commit()
-
     class Customer:
         def __init__(self):
             self.texts = []
@@ -181,6 +164,73 @@ def test_replay_completes_image_reply_batch_after_mid_generation_crash(
     assert len(customer.texts) == 1
     assert customer.images == [("EXT1", "MEDIA-1")]
     assert len(replies) == 2
+
+
+def test_replay_retries_saved_actions_without_recomputing_changed_data(
+    db_session, student, teacher, tmp_path
+):
+    _admin(db_session, teacher)
+    _, code = create_guardian_invitation(
+        db_session, student.student_id, teacher.teacher_id, secret_key=SECRET
+    )
+    _bind(db_session, student, teacher, code)
+    db_session.add(StudentImage(
+        image_id="IMG-STALE", student_id=student.student_id,
+        uploaded_by_teacher_id=teacher.teacher_id, source_message_id="SRC-STALE",
+        source_position=0, caption="原始说明", mime_type="image/jpeg", extension=".jpg",
+        byte_size=3, sha256="c" * 64, storage_path="S1/stale.jpg", status="active",
+    ))
+    db_session.commit()
+    image_root = tmp_path / "student_media"
+    image_root.mkdir()
+    image_path = image_root / "S1" / "stale.jpg"
+    image_path.parent.mkdir()
+    image_path.write_bytes(b"jpg")
+
+    class FirstCustomer:
+        def send_text(self, external_user_id, content): return "TEXT-OLD"
+        def upload_image(self, content, filename): return "MEDIA-OLD"
+        def send_image(self, external_user_id, media_id):
+            raise RuntimeError("temporary image send failure")
+
+    process_parent_text(
+        db_session, FirstCustomer(), secret_key=SECRET, external_user_id="EXT1",
+        message_id="M-STALE", text="看最近的图片", image_store=LocalImageStore(image_root),
+    )
+    inbound = db_session.query(FamilyMessage).filter_by(channel_message_id="M-STALE").one()
+    original_actions = db_session.query(FamilyMessage).filter_by(
+        reply_to_message_id=inbound.message_id, direction="outbound"
+    ).all()
+    assert len(original_actions) == 2
+    original_caption = next(row.content for row in original_actions if row.image_id is None)
+    assert "原始说明" in original_caption
+    image = db_session.get(StudentImage, "IMG-STALE")
+    image.caption = "后来更新的说明"
+    db_session.commit()
+
+    class RetryCustomer:
+        def __init__(self):
+            self.texts = []
+            self.images = []
+        def send_text(self, external_user_id, content):
+            self.texts.append(content)
+            return "TEXT-NEW"
+        def upload_image(self, content, filename): return "MEDIA-NEW"
+        def send_image(self, external_user_id, media_id):
+            self.images.append((external_user_id, media_id))
+            return f"IMAGE-{len(self.images)}"
+
+    retry_customer = RetryCustomer()
+    process_parent_text(
+        db_session, retry_customer, secret_key=SECRET, external_user_id="EXT1",
+        message_id="M-STALE", text="看最近的图片", image_store=LocalImageStore(image_root),
+    )
+    actions_after_replay = db_session.query(FamilyMessage).filter_by(
+        reply_to_message_id=inbound.message_id, direction="outbound"
+    ).all()
+    assert len(actions_after_replay) == 2
+    assert retry_customer.texts == []
+    assert retry_customer.images == [("EXT1", "MEDIA-NEW")]
 
 
 def test_latest_weekly_report_query_never_returns_draft(db_session, report_scope, report_draft):

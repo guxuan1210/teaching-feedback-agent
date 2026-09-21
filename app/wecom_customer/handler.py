@@ -283,23 +283,19 @@ def process_parent_text(
         replayable_text = duplicate.content not in (
             "[邀请码已核销]", *_RELATIONSHIPS.keys()
         )
-        deterministic_query = any(
-            token in duplicate.content
-            for token in ("图片", "反馈", "周报", "请老师回复", "转老师")
-        )
-        rebuild_deterministic = bool(
-            saved and deterministic_query
-            and any(row.status != "completed" for row in saved)
-        )
-        if replayable_text and (not saved or rebuild_deterministic):
-            if not saved and assistant_provider is not None and not deterministic_query:
+        if replayable_text and not saved:
+            deterministic_query = any(
+                token in duplicate.content
+                for token in ("图片", "反馈", "周报", "请老师回复", "转老师")
+            )
+            if assistant_provider is not None and not deterministic_query:
                 answer_parent_question(
                     db, assistant_provider, guardian_id=guardian.guardian_id,
                     student_id=original_student_id, text=duplicate.content,
                     inbound_message=duplicate,
                     conversation_id=original_conversation.conversation_id,
                 )
-            elif not saved or rebuild_deterministic:
+            else:
                 _queue_query_replies(
                     db, original_conversation, duplicate, guardian.guardian_id,
                     original_student_id, duplicate.content,
